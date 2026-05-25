@@ -325,37 +325,7 @@ File `6-api-access-control.yaml` adds a browser-grade OAuth2 / OIDC authenticati
 | `X-Auth-Request-Email` | Email from Keycloak |
 
 ### Architecture with API Access Control
-
-```
-Client (browser)
-  │  1st request: no cookie → GET /retail-banking/
-  ▼
-Global IngressGateway  ── AuthorizationPolicy CUSTOM ──▶  OAuth2 Proxy :4180
-  │                                                               │
-  │                                                         No session found
-  │                                                               │ 302
-  ▼                                                               ▼
-Browser redirected ──────────────────────────────▶  auth.mhnbank.xyz (Keycloak)
-  │                        user logs in                           │
-  │◀────────────────── 302 /oauth2/callback?code= ───────────────┘
-  │
-  ▼
-GET /oauth2/callback → IngressGateway → OAuth2 Proxy
-                                              │ exchanges code for tokens
-                                              ▼ Keycloak /token
-                                        stores in Redis
-                                              │ 302 + Set-Cookie
-  │◀────────────────────────────────────────-┘
-  │  resend with cookie
-  ▼
-Global IngressGateway  ── AuthorizationPolicy CUSTOM ──▶  OAuth2 Proxy :4180
-  │                                                         cookie valid → 200
-  │                                                         + X-Auth-Request-* headers
-  ▼ (mTLS into mesh)
-  ├─ /retail-banking/* → retail-banking-ingressgateway → customer-profile-svc
-  ├─ /payments/*       → payments-ingressgateway       → transfer-svc
-  └─ /grc/*            → grc-ingressgateway            → fraud-svc
-```
+![alt text](<../GitHub/istio-distributed-ingressGateway/assets/Api Access Flow.png>)
 
 ### DNS requirements
 
@@ -682,3 +652,116 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 /payments/       → transfer-svc:7071          → payment-gateway-svc:7072 → fx-svc:7073    (leaf)
 /grc/            → fraud-svc:6061             → audit-svc:6062   → sanction-svc:6063      (leaf)
 ```
+ ## Project Summary: Distributed API Gateway for MHN Bank
+
+  What It Is
+
+  A secure, enterprise-grade API gateway infrastructure built on AWS, designed to protect and route all external traffic into a banking microservices
+   platform. It uses Istio service mesh — the industry-standard technology used by Google, Lyft, and major banks — running on a managed Kubernetes
+  cluster (AWS EKS).
+
+  ---
+  The Problem It Solves
+
+  Modern banking platforms are made up of many internal services (retail banking, payments, risk & compliance). Without a proper gateway
+  architecture, you face these risks:
+  - Any service could be called directly from the internet
+  - Traffic between internal services is unencrypted and unauthenticated
+  - No central enforcement of who can call what
+  - User authentication is scattered and inconsistent
+
+  ---
+  What Was Built
+  
+  A two-tier distributed gateway with three layers of security:
+
+  Tier 1 — Single Public Entry Point
+  - One internet-facing load balancer (finance.mhnbank.xyz) receives all traffic
+  - Routes requests to the correct internal domain by URL path:
+    - /retail-banking/* → Retail Banking services
+    - /payments/* → Payments services
+    - /grc/* → Governance, Risk & Compliance services
+
+  Tier 2 — Per-Domain Isolation
+  - Each business domain has its own internal gateway (not exposed to the internet)
+  - Traffic can only flow through the designated path — no cross-domain shortcuts
+
+  Inside the Mesh — Zero-Trust Service Communication
+  - Every service-to-service call is encrypted with mutual TLS (mTLS)
+  - Every service has a cryptographic identity (SPIFFE X.509 certificate)
+  - A service can only be called by its one authorized upstream — enforced by policy, not convention
+
+  ---
+  Authentication & Identity (OAuth2 / Keycloak)
+  
+  Users are authenticated via Keycloak (an enterprise-grade identity provider):
+  1. User visits finance.mhnbank.xyz → redirected to login page at auth.mhnbank.xyz
+  2. Logs in with their credentials → Keycloak issues a session token
+  3. All subsequent API calls are validated automatically — no re-login required
+  4. The authenticated user's identity is passed securely to backend services via HTTP headers
+
+  ---
+  Key Security Properties
+
+  ┌────────────────────────────────┬─────────────────────────────────────────────────────────────────────────┐
+  │            Property            │                             Implementation                              │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Single public entry point      │ One AWS load balancer for the entire platform                           │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Namespace isolation            │ Each domain is in a separate Kubernetes namespace, unreachable directly │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Encrypted internal traffic     │ mTLS on every service-to-service connection                             │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Service identity verification  │ SPIFFE certificates — each service proves who it is cryptographically   │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Least-privilege access control │ Each service only accepts calls from its one authorized upstream        │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ User authentication            │ OAuth2/OIDC via Keycloak — industry standard                            │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Observability                  │ Kiali dashboard shows live service topology and confirms mTLS is active │
+  └────────────────────────────────┴─────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  Business Domains Covered
+
+  ┌─────────────────────────────────────┬───────────────────────────────────────────────┐
+  │               Domain                │                   Services                    │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
+  │ Retail Banking                      │ Customer Profile → Account → Bank Statement   │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Service identity verification  │ SPIFFE certificates — each service proves who it is cryptographically   │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Least-privilege access control │ Each service only accepts calls from its one authorized upstream        │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ User authentication            │ OAuth2/OIDC via Keycloak — industry standard                            │
+  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+  │ Observability                  │ Kiali dashboard shows live service topology and confirms mTLS is active │
+  └────────────────────────────────┴─────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  Business Domains Covered
+
+  ┌─────────────────────────────────────┬───────────────────────────────────────────────┐
+  │               Domain                │                   Services                    │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
+  │ Retail Banking                      │ Customer Profile → Account → Bank Statement   │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
+  │ Payments                            │ Transfer → Payment Gateway → FX               │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
+  │ GRC (Governance, Risk & Compliance) │ Fraud Detection → Audit → Sanctions Screening │
+  └─────────────────────────────────────┴───────────────────────────────────────────────┘
+
+  ---
+  Infrastructure
+
+  - Cloud: AWS (Singapore region, ap-southeast-1)
+  - Platform: AWS EKS (managed Kubernetes)
+  - Service Mesh: Istio 1.29.2
+  - Identity Provider: Keycloak (Bitnami, self-hosted)
+  - Observability: Kiali + Envoy access logs
+
+  ---
+  In plain terms: this project ensures that only authenticated users can reach the bank's APIs, all internal traffic is encrypted and verified by
+  cryptographic certificates, and no service can be reached unless the call comes from exactly the right upstream — enforced by policy at the
+  infrastructure level, not application code.
