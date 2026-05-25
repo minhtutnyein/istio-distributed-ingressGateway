@@ -1,0 +1,72 @@
+# ============================================================
+# apps/auth/redis.yaml
+# Purpose:  Redis — session store for OAuth2 Proxy.
+#           OAuth2 Proxy stores auth sessions in Redis so that
+#           session cookies are validated without hitting Keycloak
+#           on every request (step 18-19 in the auth flow).
+# ============================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redis
+  namespace: auth
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: auth
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      serviceAccountName: redis
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          ports:
+            - containerPort: 6379
+          args:
+            - redis-server
+            - --save ""          # disable persistence (session data only)
+            - --maxmemory 128mb
+            - --maxmemory-policy allkeys-lru
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            exec:
+              command: [redis-cli, ping]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: [redis-cli, ping]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: auth
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379

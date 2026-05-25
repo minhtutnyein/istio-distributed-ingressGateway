@@ -296,6 +296,149 @@ Expected: 9 AuthorizationPolicies — one per service, restricting callers to th
 
 ---
 
+## Step 10b: Deploy Keycloak — Identity Provider
+
+```bash
+# Create keycloak namespace (sidecar injection disabled)
+kubectl apply -f apps/keycloak/namespace.yaml
+
+# Apply realm ConfigMap BEFORE the Helm install so keycloakConfigCli can mount it
+kubectl apply -f apps/keycloak/realm-import.yaml
+
+# Install Keycloak via Bitnami OCI chart
+helm upgrade --install keycloak \
+  oci://registry-1.docker.io/bitnamicharts/keycloak \
+  -n keycloak \
+  -f helm-values/keycloak-values.yaml \
+  --wait --timeout=5m
+```
+
+Verify:
+
+```bash
+kubectl get pods -n keycloak
+# Expected: keycloak-0 or keycloak-<hash> Running 1/1
+
+kubectl get svc keycloak -n keycloak
+# Expected: TYPE=ClusterIP (accessible via auth.mhnbank.xyz through IngressGateway)
+```
+
+**Keycloak is reachable at `http://auth.mhnbank.xyz/realms/mhnbank` via the IngressGateway.**  
+The realm, client (`oauth2-proxy-client`), scopes, and demo user (`testuser`/`testpassword`) are imported automatically on first startup by the `keycloakConfigCli` init job.
+
+---
+
+## Step 10c: Deploy Redis + OAuth2 Proxy — ext_authz Backend
+
+> **Before applying:** update the placeholder secrets in `apps/auth/oauth2-proxy-secret.yaml`.
+
+```bash
+# Generate a 32-byte cookie secret:
+python3 -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
+
+# Edit apps/auth/oauth2-proxy-secret.yaml:
+#   OAUTH2_PROXY_CLIENT_SECRET → value from Keycloak client "oauth2-proxy-client"
+#   OAUTH2_PROXY_COOKIE_SECRET → base64 output from above
+
+# Also verify apps/auth/oauth2-proxy.yaml ConfigMap:
+#   oidc_issuer_url = "http://auth.mhnbank.xyz/realms/mhnbank"
+#   redirect_url    = "http://finance.mhnbank.xyz/oauth2/callback"
+```
+
+```bash
+kubectl apply -f apps/auth/namespace.yaml
+kubectl apply -f apps/auth/redis.yaml
+kubectl apply -f apps/auth/oauth2-proxy-secret.yaml
+kubectl apply -f apps/auth/oauth2-proxy.yaml
+```
+
+Verify:
+
+```bash
+kubectl get pods -n auth
+# Expected:
+#   redis-<hash>        Running 1/1
+#   oauth2-proxy-<hash> Running 1/1
+
+# OAuth2 Proxy health check
+kubectl port-forward -n auth deploy/oauth2-proxy 4180:4180 &
+curl -s http://localhost:4180/ping
+# Expected: OK
+```
+
+---
+
+## Step 10d: Apply API Access Control Resources
+
+```bash
+# Update global Gateway to add auth.mhnbank.xyz host binding
+kubectl apply -f 1-istio-gateway-global.yaml
+
+# Update global VirtualService — adds /oauth2/ route before catch-all
+kubectl apply -f 3-global-virtualservice.yaml
+
+# Add VirtualService for Keycloak on auth.mhnbank.xyz
+kubectl apply -f 3b-keycloak-virtualservice.yaml
+
+# Apply CUSTOM AuthorizationPolicy — delegates /retail-banking/*, /payments/*, /grc/*
+# to OAuth2 Proxy for every incoming request
+kubectl apply -f 6-api-access-control.yaml
+```
+
+Verify:
+
+```bash
+# 1. CUSTOM AuthorizationPolicy present
+kubectl get authorizationpolicy -n istio-system
+# Expected: ext-authz-oauth2-proxy  action=CUSTOM  provider=oauth2-proxy
+
+# 2. extensionProvider registered in MeshConfig
+kubectl get configmap istio -n istio-system -o jsonpath='{.data.mesh}' | grep -A5 extensionProviders
+
+# 3. Total AuthorizationPolicies: 9 service-level + 1 CUSTOM = 10
+kubectl get authorizationpolicy -A --no-headers | wc -l
+
+# 4. /oauth2/ route in global VirtualService
+kubectl get virtualservice global-virtualservice -n istio-system \
+  -o jsonpath='{.spec.http[*].match[*].uri.prefix}'
+# Must include /oauth2/
+
+# 5. keycloak-vs present
+kubectl get virtualservice keycloak-vs -n istio-system
+```
+
+**End-to-end browser test:**
+
+```bash
+INGRESS_HOST=$(kubectl get svc istio-ingressgateway -n istio-system \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+# Unauthenticated request → 302 redirect to Keycloak login
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "Host: finance.mhnbank.xyz" \
+  http://${INGRESS_HOST}/retail-banking/
+# Expected: 302 (Location header points to auth.mhnbank.xyz/realms/mhnbank/...)
+
+# OAuth2 Proxy health check via IngressGateway
+curl -s -H "Host: finance.mhnbank.xyz" \
+  http://${INGRESS_HOST}/oauth2/ping
+# Expected: OK
+
+# Full browser flow:
+# 1. Open http://finance.mhnbank.xyz/retail-banking/ in a browser
+# 2. Keycloak login page appears at http://auth.mhnbank.xyz/...
+# 3. Login with testuser / testpassword
+# 4. Browser redirected back to /retail-banking/ with authenticated response
+```
+
+> **Production notes:**
+> - Replace `changeme-keycloak-client-secret` in both `apps/auth/oauth2-proxy-secret.yaml` and `apps/keycloak/realm-import.yaml` with a strong random secret.
+> - Set `cookie_secure = true` in `apps/auth/oauth2-proxy.yaml` ConfigMap when TLS is terminated at the IngressGateway.
+> - Replace the H2 embedded database in `helm-values/keycloak-values.yaml` with a PostgreSQL database for production.
+> - Remove the demo user from `apps/keycloak/realm-import.yaml` before deploying to production.
+
+---
+
 ## Step 11: Deploy Domain App Resources
 
 > **Important:** Apply namespace files first because Istio needs the `istio-injection` label before pods are scheduled. If you `kubectl apply -f <dir>`, files are processed alphabetically — `account.yaml` comes before `namespace.yaml`.

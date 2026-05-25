@@ -1,0 +1,37 @@
+# ============================================================
+# 3b-keycloak-virtualservice.yaml
+# Purpose:  Routes auth.mhnbank.xyz traffic to Keycloak.
+#
+# Why a separate host:
+#   Keycloak's OIDC discovery document (/.well-known/openid-configuration)
+#   and login page must be accessible to both:
+#     - Browsers (to display the login UI — steps 5-7 in the auth flow)
+#     - OAuth2 Proxy (to exchange the authorization code for tokens — step 13)
+#   Using a dedicated hostname avoids path-prefix collisions with
+#   the API paths on finance.mhnbank.xyz.
+#
+# DNS:  Create a CNAME record:
+#   auth.mhnbank.xyz → <ELB hostname of istio-ingressgateway>
+# ============================================================
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: keycloak-vs
+  namespace: istio-system
+spec:
+  hosts:
+    - "auth.mhnbank.xyz"
+  gateways:
+    - global-istio-gateway
+  http:
+    - route:
+        - destination:
+            host: keycloak.keycloak.svc.cluster.local
+            port:
+              number: 80
+      timeout: 30s
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: gateway-error,connect-failure

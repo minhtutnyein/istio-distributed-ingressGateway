@@ -1,0 +1,48 @@
+# ============================================================
+# 6-api-access-control.yaml
+# Purpose:  API Access Control at the Global Istio IngressGateway
+#           using the CUSTOM AuthorizationPolicy action.
+#
+# How it works:
+#   1. A request arrives at the global IngressGateway for
+#      /retail-banking/*, /payments/*, or /grc/*.
+#   2. Envoy consults this AuthorizationPolicy (action: CUSTOM).
+#   3. Envoy calls the OAuth2 Proxy ext_authz HTTP service
+#      (registered as "oauth2-proxy" in MeshConfig extensionProviders).
+#   4a. Valid session cookie → OAuth2 Proxy returns 200 OK.
+#       Envoy adds X-Auth-Request-Access-Token + X-Auth-Request-User
+#       headers and forwards the request into the mesh.
+#   4b. No / expired session → OAuth2 Proxy returns 302.
+#       Envoy passes the redirect to the client browser, which
+#       follows the OAuth2 Authorization Code flow with Keycloak.
+#
+# Prerequisites (applied before this file):
+#   - MeshConfig extensionProviders registered (helm-values/istiod-values.yaml)
+#   - OAuth2 Proxy running in auth namespace  (apps/auth/)
+#   - Keycloak running in keycloak namespace   (helm-values/keycloak-values.yaml)
+#   - VirtualService routes /oauth2/* to OAuth2 Proxy (3-global-virtualservice.yaml)
+#   - VirtualService routes auth.mhnbank.xyz  to Keycloak (3b-keycloak-virtualservice.yaml)
+# ============================================================
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: ext-authz-oauth2-proxy
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: CUSTOM
+  provider:
+    name: oauth2-proxy
+  rules:
+    - to:
+        - operation:
+            # Only these paths trigger the ext_authz check.
+            # /oauth2/* (OAuth2 Proxy callback) and /keycloak/* are excluded
+            # intentionally so the auth flow itself is not intercepted.
+            paths:
+              - /retail-banking/*
+              - /payments/*
+              - /grc/*

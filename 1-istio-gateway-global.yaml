@@ -17,6 +17,7 @@ spec:
   selector:
     istio: ingressgateway
   servers:
+    # ── API Gateway (finance.mhnbank.xyz) ────────────────────
     - port:
         number: 80
         name: http
@@ -32,4 +33,14 @@ spec:
         credentialName: finance-mhnbank-xyz-tls   # K8s Secret with TLS cert
       hosts:
         - "finance.mhnbank.xyz"
+    # ── Keycloak Identity Provider (auth.mhnbank.xyz) ────────
+    # Keycloak's login page and OIDC endpoints must be reachable
+    # by browsers during the OAuth2 Authorization Code flow
+    # (steps 5-6 in the 21-step auth flow).
+    - port:
+        number: 80
+        name: keycloak-http
+        protocol: HTTP
+      hosts:
+        - "auth.mhnbank.xyz"
 ---

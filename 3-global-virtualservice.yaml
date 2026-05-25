@@ -72,6 +72,19 @@ spec:
             port:
               number: 80
 
+    # /oauth2/* → OAuth2 Proxy (callback + sign-in/sign-out endpoints)
+    # This route MUST come before the catch-all.
+    # The OAuth2 Proxy callback (/oauth2/callback) receives the
+    # authorization code from Keycloak (step 10-12 in the auth flow).
+    - match:
+        - uri:
+            prefix: /oauth2/
+      route:
+        - destination:
+            host: oauth2-proxy.auth.svc.cluster.local
+            port:
+              number: 4180
+
     # Catch-all: return 200 for all unmatched paths (/, /favicon.ico, scanners, etc.)
     # Prevents 404 NR route_not_found from polluting Kiali traffic health.
     - match:

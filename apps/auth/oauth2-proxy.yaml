@@ -1,0 +1,129 @@
+# ============================================================
+# apps/auth/oauth2-proxy.yaml
+# Purpose:  OAuth2 Proxy — the ext_authz backend for Istio.
+#
+# Configuration is passed entirely as CLI args (no config file).
+# This avoids TOML/YAML parsing incompatibilities between
+# OAuth2 Proxy versions (v7.6.0 rejects the legacy "upstream" key).
+#
+# Role in the auth flow:
+#   - Envoy (IngressGateway) calls this service on every request
+#     to /retail-banking/*, /payments/*, /grc/* (CUSTOM AuthZ).
+#   - Valid session cookie → 200 OK + X-Auth-Request-* headers.
+#   - No session → 302 redirect to Keycloak login page.
+#   - After Keycloak callback → validates code, stores token in
+#     Redis, sets cookie, redirects browser to original URL.
+#
+# Update these two args before deploying:
+#   --oidc-issuer-url   replace auth.mhnbank.xyz with your Keycloak hostname
+#   --redirect-url      replace finance.mhnbank.xyz with your ELB hostname
+# ============================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oauth2-proxy
+  namespace: auth
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-proxy
+  namespace: auth
+  labels:
+    app: oauth2-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oauth2-proxy
+  template:
+    metadata:
+      labels:
+        app: oauth2-proxy
+    spec:
+      serviceAccountName: oauth2-proxy
+      containers:
+        - name: oauth2-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+          args:
+            # ── Identity Provider ────────────────────────────
+            - --provider=keycloak-oidc
+            - --client-id=oauth2-proxy-client
+            # Use in-cluster DNS so OAuth2 Proxy can reach Keycloak without an
+            # external DNS record for auth.mhnbank.xyz.  KC_HOSTNAME_URL is set
+            # in Keycloak so OIDC metadata (authorization_endpoint etc.) still
+            # advertises auth.mhnbank.xyz for browser redirects.
+            - --oidc-issuer-url=http://keycloak.keycloak.svc.cluster.local/realms/mhnbank
+            # Keycloak tokens carry iss=auth.mhnbank.xyz but OAuth2 Proxy is
+            # configured with the internal issuer URL — skip the mismatch check.
+            - --insecure-oidc-skip-issuer-verification=true
+            # ── Redirect URI ─────────────────────────────────
+            - --redirect-url=http://finance.mhnbank.xyz/oauth2/callback
+            # ── Email / scope ────────────────────────────────
+            - --email-domain=*
+            - --scope=openid profile email
+            # ── Upstream — proxy only validates, Envoy routes ─
+            - --upstream=static://200
+            # ── Session cookie ───────────────────────────────
+            - --cookie-name=_mhnbank_oauth2
+            - --cookie-secure=false
+            - --cookie-refresh=4m
+            - --cookie-expire=30m
+            - --skip-provider-button=true
+            # ── Token passthrough headers ─────────────────────
+            - --pass-access-token=true
+            - --set-xauthrequest=true
+            - --set-authorization-header=true
+            # ── Session store ────────────────────────────────
+            - --session-store-type=redis
+            - --redis-connection-url=redis://redis.auth.svc.cluster.local:6379
+            # ── Listener ─────────────────────────────────────
+            - --http-address=0.0.0.0:4180
+            - --silence-ping-logging=true
+          env:
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy-secret
+                  key: OAUTH2_PROXY_CLIENT_SECRET
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy-secret
+                  key: OAUTH2_PROXY_COOKIE_SECRET
+          ports:
+            - name: http
+              containerPort: 4180
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-proxy
+  namespace: auth
+spec:
+  selector:
+    app: oauth2-proxy
+  ports:
+    - name: http
+      port: 4180
+      targetPort: 4180

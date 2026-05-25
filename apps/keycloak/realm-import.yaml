@@ -1,0 +1,94 @@
+# ============================================================
+# apps/keycloak/realm-import.yaml
+# Purpose:  ConfigMap carrying the Keycloak realm export JSON.
+#           Mounted by the keycloakConfigCli init job in the
+#           Bitnami Keycloak Helm chart (keycloakConfigCli.enabled).
+#
+# Realm:    mhnbank
+# Client:   oauth2-proxy-client
+# Scopes:   retail-banking, payments, grc
+# Users:    testuser / testpassword (demo only — remove in production)
+#
+# IMPORTANT: The client secret below must match
+#   OAUTH2_PROXY_CLIENT_SECRET in apps/auth/oauth2-proxy-secret.yaml.
+# ============================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm-import
+  namespace: keycloak
+data:
+  mhnbank-realm.json: |
+    {
+      "realm": "mhnbank",
+      "enabled": true,
+      "sslRequired": "none",
+      "registrationAllowed": false,
+      "accessTokenLifespan": 300,
+      "clients": [
+        {
+          "clientId": "oauth2-proxy-client",
+          "enabled": true,
+          "secret": "changeme-keycloak-client-secret",
+          "redirectUris": [
+            "http://finance.mhnbank.xyz/oauth2/callback",
+            "https://finance.mhnbank.xyz/oauth2/callback"
+          ],
+          "webOrigins": [
+            "http://finance.mhnbank.xyz",
+            "https://finance.mhnbank.xyz"
+          ],
+          "publicClient": false,
+          "protocol": "openid-connect",
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "authorizationServicesEnabled": false,
+          "defaultClientScopes": [
+            "openid",
+            "profile",
+            "email"
+          ],
+          "optionalClientScopes": [
+            "retail-banking",
+            "payments",
+            "grc"
+          ]
+        }
+      ],
+      "clientScopes": [
+        {
+          "name": "retail-banking",
+          "protocol": "openid-connect",
+          "attributes": { "include.in.token.scope": "true" }
+        },
+        {
+          "name": "payments",
+          "protocol": "openid-connect",
+          "attributes": { "include.in.token.scope": "true" }
+        },
+        {
+          "name": "grc",
+          "protocol": "openid-connect",
+          "attributes": { "include.in.token.scope": "true" }
+        }
+      ],
+      "users": [
+        {
+          "username": "testuser",
+          "enabled": true,
+          "email": "testuser@mhnbank.xyz",
+          "firstName": "Test",
+          "lastName": "User",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "testpassword",
+              "temporary": false
+            }
+          ],
+          "clientRoles": {}
+        }
+      ]
+    }

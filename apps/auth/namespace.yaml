@@ -1,0 +1,16 @@
+# ============================================================
+# apps/auth/namespace.yaml
+# Purpose:  Namespace for OAuth2 Proxy and Redis session store.
+#           Sidecar injection is intentionally DISABLED — the
+#           OAuth2 Proxy is called by Envoy as an ext_authz HTTP
+#           backend and must accept plain HTTP on port 4180.
+#           Enabling STRICT mTLS sidecar injection here would
+#           break the envoyExtAuthzHttp check flow.
+# ============================================================
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: auth
+  labels:
+    istio-injection: disabled

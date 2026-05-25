@@ -14,10 +14,9 @@ This project implements a **two-tier distributed API gateway** using **Istio ser
 ---
 
 ## Architecture
-![alt text](assets/Istio-Distributed-Gateway-Architecture.png)
+![alt text](<assets/Two-Tier Distributred Gateway.png>)
 
-
-### Two-Tier Gateway Traffic-Flow Design
+### Two-Tier Gateway Design
 
 ```mermaid
 flowchart TB
@@ -87,9 +86,10 @@ flowchart TB
 | Service identity | SPIFFE X.509 SVIDs issued by `istiod` (trust domain: `cluster.local`) |
 | mTLS enforcement | `PeerAuthentication` STRICT mesh-wide + per-namespace |
 | Client-side mTLS | `DestinationRule` with `tls.mode: ISTIO_MUTUAL` per service |
-| Access control | `AuthorizationPolicy` per service — namespace GW SA is the only allowed entry-point caller |
+| Access control (mesh) | `AuthorizationPolicy` per service — namespace GW SA is the only allowed entry-point caller |
+| Access control (gateway) | `AuthorizationPolicy` `action: CUSTOM` → OAuth2 Proxy ext_authz → Keycloak OIDC |
 | Routing | Istio `Gateway` + `VirtualService` at both global and namespace tiers |
-| Observability | Envoy access logs + Prometheus metrics + Kiali service graph dashboard |
+| Observability | Envoy access logs + Kiali service graph dashboard |
 
 ---
 
@@ -99,12 +99,15 @@ flowchart TB
 
 | File | Purpose |
 |---|---|
+| `0-istio-operator-global.yaml` | IstioOperator CR — installs Istio control plane + all 4 IngressGateways |
 | `0-istio-namespaces-domains.yaml` | Domain namespace declarations with `istio-injection: enabled` |
 | `1-istio-gateway-global.yaml` | Istio `Gateway` resource — binds global IngressGateway to `finance.mhnbank.xyz` |
 | `2-mtls-peer-authentication.yaml` | `PeerAuthentication` STRICT policies for all namespaces |
 | `3-global-virtualservice.yaml` | Global `VirtualService` — routes path prefixes to namespace IngressGateways |
 | `4-mtls-destination-rules.yaml` | `DestinationRule` for every service — client-side mTLS mode |
 | `5-authorization-policies.yaml` | `AuthorizationPolicy` — RBAC via SPIFFE principal per service |
+| `3b-keycloak-virtualservice.yaml` | `VirtualService` — routes `auth.mhnbank.xyz` to Keycloak |
+| `6-api-access-control.yaml` | `AuthorizationPolicy` `action: CUSTOM` — delegates auth to OAuth2 Proxy ext_authz |
 
 ### Domain apps — per namespace
 
@@ -116,97 +119,94 @@ flowchart TB
 | `apps/*/traffic-policy.yaml` | Traffic policy `VirtualService` — retries + timeouts for internal calls |
 | `apps/*/<service>.yaml` | Deployment + Service + ServiceAccount |
 
-> The GRC domain app files live under `apps/risk-compliance/` (Kubernetes namespace is `grc`).
+### Auth services
+
+| File | Purpose |
+|---|---|
+| `apps/auth/namespace.yaml` | `auth` namespace — sidecar injection **disabled** (ext_authz requires plain HTTP) |
+| `apps/auth/redis.yaml` | Redis — OAuth2 Proxy session store |
+| `apps/auth/oauth2-proxy-secret.yaml` | Secret — Keycloak client secret + cookie secret (replace placeholders) |
+| `apps/auth/oauth2-proxy.yaml` | OAuth2 Proxy — ext_authz backend; validates sessions with Keycloak OIDC |
+| `apps/keycloak/namespace.yaml` | `keycloak` namespace — sidecar injection **disabled** |
+| `apps/keycloak/realm-import.yaml` | ConfigMap — Keycloak realm JSON (realm `mhnbank`, client `oauth2-proxy-client`) |
 
 ### Helm values
 
 | File | Purpose |
 |---|---|
 | `helm-values/istio-base-values.yaml` | `istio/base` values — Istio CRDs |
-| `helm-values/istiod-values.yaml` | `istio/istiod` values — control plane |
+| `helm-values/istiod-values.yaml` | `istio/istiod` values — control plane + `meshConfig.extensionProviders` for OAuth2 Proxy |
 | `helm-values/istio-ingress-values.yaml` | `istio/gateway` values — global IngressGateway (LoadBalancer) |
 | `helm-values/retail-banking-ingress-values.yaml` | `istio/gateway` values — `retail-banking` namespace gateway (ClusterIP) |
 | `helm-values/payments-ingress-values.yaml` | `istio/gateway` values — `payments` namespace gateway (ClusterIP) |
 | `helm-values/grc-ingress-values.yaml` | `istio/gateway` values — `grc` namespace gateway (ClusterIP) |
-| `helm-values/prometheus-values.yaml` | `prometheus-community/prometheus` values — metrics scraping for Istio mesh |
+| `helm-values/keycloak-values.yaml` | Bitnami Keycloak Helm values — realm import + ClusterIP service |
 | `helm-values/kiali-values.yaml` | Kiali observability dashboard values |
-
-### Scripts
-
-| File | Purpose |
-|---|---|
-| `deploy.sh` | Full automated deployment — Steps 0–12 (Istio, gateways, apps, Prometheus, Kiali, traffic test) |
-| `verify.sh` | Full automated verification — 11 checks covering pods, mTLS, AuthZ, SPIFFE, and traffic |
 
 ---
 
 ## Deployment Order
 
-### Automated
-
-```bash
-# Connect to EKS first, then run the full deployment script
-aws eks update-kubeconfig --name istiodc1-cluster --region ap-southeast-1
-bash deploy.sh
-```
-
-### Manual step-by-step
-
 ```bash
 # Step 0 — Connect to EKS
 aws eks update-kubeconfig --name istiodc1-cluster --region ap-southeast-1
 
-# Step 1 — Add Helm repos
-helm repo add istio               https://istio-release.storage.googleapis.com/charts
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add kiali               https://kiali.org/helm-charts
+# Step 1 — Add Istio Helm repo
+helm repo add istio https://istio-release.storage.googleapis.com/charts
 helm repo update
 
 # Step 2 — Install Istio base (CRDs)
 helm upgrade --install istio-base istio/base -n istio-system --create-namespace \
-  --version 1.29.2 -f helm-values/istio-base-values.yaml
+  -f helm-values/istio-base-values.yaml
 
 # Step 3 — Install istiod (control plane)
 helm upgrade --install istiod istio/istiod -n istio-system --wait \
-  --version 1.29.2 -f helm-values/istiod-values.yaml
+  -f helm-values/istiod-values.yaml
 
 # Step 4 — Create namespaces + enable sidecar injection
 kubectl apply -f 0-istio-namespaces-domains.yaml
 
 # Step 5 — Install global IngressGateway (the single internet-facing LoadBalancer)
 helm upgrade --install istio-ingressgateway istio/gateway -n istio-system \
-  --version 1.29.2 -f helm-values/istio-ingress-values.yaml
+  -f helm-values/istio-ingress-values.yaml
 
 # Step 6 — Install per-namespace IngressGateways (internal ClusterIP)
 helm upgrade --install retail-banking-ingressgateway istio/gateway -n retail-banking \
-  --version 1.29.2 -f helm-values/retail-banking-ingress-values.yaml
+  -f helm-values/retail-banking-ingress-values.yaml
 
 helm upgrade --install payments-ingressgateway istio/gateway -n payments \
-  --version 1.29.2 -f helm-values/payments-ingress-values.yaml
+  -f helm-values/payments-ingress-values.yaml
 
 helm upgrade --install grc-ingressgateway istio/gateway -n grc \
-  --version 1.29.2 -f helm-values/grc-ingress-values.yaml
+  -f helm-values/grc-ingress-values.yaml
 
-# Step 7 — Deploy Istio global Gateway CR + mTLS policies + VirtualService
+# Step 6b — Deploy Keycloak (Identity Provider)
+kubectl apply -f apps/keycloak/namespace.yaml
+kubectl apply -f apps/keycloak/realm-import.yaml
+helm upgrade --install keycloak oci://registry-1.docker.io/bitnamicharts/keycloak \
+  -n keycloak -f helm-values/keycloak-values.yaml --wait
+
+# Step 6c — Deploy Redis + OAuth2 Proxy (ext_authz backend)
+# Update placeholder secrets first:
+#   apps/auth/oauth2-proxy-secret.yaml — set real client-secret + cookie-secret
+kubectl apply -f apps/auth/namespace.yaml
+kubectl apply -f apps/auth/redis.yaml
+kubectl apply -f apps/auth/oauth2-proxy-secret.yaml
+kubectl apply -f apps/auth/oauth2-proxy.yaml
+
+# Step 7 — Deploy Istio global Gateway CR + mTLS policies + VirtualService + access control
 kubectl apply -f 1-istio-gateway-global.yaml
 kubectl apply -f 2-mtls-peer-authentication.yaml
 kubectl apply -f 3-global-virtualservice.yaml
+kubectl apply -f 3b-keycloak-virtualservice.yaml
 kubectl apply -f 4-mtls-destination-rules.yaml
 kubectl apply -f 5-authorization-policies.yaml
+kubectl apply -f 6-api-access-control.yaml
 
 # Step 8 — Deploy domain app resources (namespace Gateway CRs, VSes, Deployments)
 kubectl apply -f apps/retail-banking/
 kubectl apply -f apps/payments/
 kubectl apply -f apps/risk-compliance/
-
-# Step 9 — Install Prometheus (metrics backend for Kiali)
-helm upgrade --install prometheus prometheus-community/prometheus \
-  -n istio-system -f helm-values/prometheus-values.yaml --wait
-
-# Step 10 — Install Kiali operator + CR
-helm upgrade --install kiali-operator kiali/kiali-operator \
-  -n kiali-operator --create-namespace \
-  -f helm-values/kiali-values.yaml --wait
 ```
 
 ---
@@ -263,15 +263,112 @@ spiffe://cluster.local/ns/<namespace>/sa/<serviceaccount>
 
 ---
 
-## Verification Commands
+## API Access Control — OAuth2 Proxy + Keycloak + Istio CUSTOM Action
 
-### Automated
+File `6-api-access-control.yaml` adds a browser-grade OAuth2 / OIDC authentication layer at the global IngressGateway using the `CUSTOM` AuthorizationPolicy action. This approach is based on [API Authentication using Istio Ingress Gateway, OAuth2-Proxy and Keycloak](https://medium.com/@senthilrch/api-authentication-using-istio-ingress-gateway-oauth2-proxy-and-keycloak-a980c996c259).
 
-```bash
-bash verify.sh
+### Components
+
+| Component | Namespace | Role |
+|---|---|---|
+| **Keycloak** | `keycloak` | Identity Provider — authenticates users, issues OIDC tokens |
+| **Redis** | `auth` | OAuth2 Proxy session store (token refresh without re-login) |
+| **OAuth2 Proxy** | `auth` | ext_authz backend — validates session cookies, orchestrates Keycloak redirect |
+| **`AuthorizationPolicy` CUSTOM** | `istio-system` | Tells Envoy to call OAuth2 Proxy for every `/retail-banking/*`, `/payments/*`, `/grc/*` request |
+| **`extensionProviders` in MeshConfig** | `istiod` | Registers OAuth2 Proxy service as `oauth2-proxy` ext_authz backend |
+
+### 21-Step Authentication Flow
+
+```
+ 1  Browser requests finance.mhnbank.xyz/retail-banking/
+ 2  IngressGateway Envoy calls OAuth2 Proxy (ext_authz HTTP check) ← CUSTOM AuthorizationPolicy
+ 3  OAuth2 Proxy creates session state in Redis
+ 4  OAuth2 Proxy returns 302 → Keycloak /realms/mhnbank/protocol/openid-connect/auth
+ 5  Browser follows redirect to auth.mhnbank.xyz (Keycloak via IngressGateway)
+ 6  IngressGateway routes auth.mhnbank.xyz → Keycloak  ← keycloak-vs VirtualService
+ 7  Keycloak serves the login form
+ 8  User submits credentials
+ 9  Keycloak validates credentials, generates authorization code
+10  Keycloak redirects browser → finance.mhnbank.xyz/oauth2/callback?code=...
+11  Browser follows redirect through IngressGateway
+12  IngressGateway routes /oauth2/* → OAuth2 Proxy  ← global-virtualservice
+13  OAuth2 Proxy exchanges code for tokens at Keycloak /token endpoint
+14  Keycloak returns access token, ID token, refresh token
+15  OAuth2 Proxy stores tokens in Redis, sets _mhnbank_oauth2 session cookie
+16  OAuth2 Proxy redirects browser back to original URL
+17  Browser resends original request with session cookie
+18  IngressGateway Envoy calls OAuth2 Proxy again (ext_authz check)
+19  OAuth2 Proxy validates cookie against Redis → 200 OK
+        + X-Auth-Request-Access-Token, X-Auth-Request-User forwarded upstream
+20  Envoy forwards the request into the mesh (mTLS) with auth headers
+21  Upstream service responds
 ```
 
-### Manual checks
+### Keycloak Configuration
+
+| Setting | Value |
+|---|---|
+| Realm | `mhnbank` |
+| Client ID | `oauth2-proxy-client` |
+| Client Secret | `changeme-keycloak-client-secret` (update in `oauth2-proxy-secret.yaml` + `realm-import.yaml`) |
+| Redirect URI | `http://finance.mhnbank.xyz/oauth2/callback` |
+| Scopes | `openid`, `profile`, `email`, `retail-banking`, `payments`, `grc` |
+| Demo user | `testuser` / `testpassword` |
+
+### Headers forwarded to upstream services (after auth)
+
+| Header | Content |
+|---|---|
+| `Authorization` | `Bearer <access_token>` |
+| `X-Auth-Request-Access-Token` | Raw access token |
+| `X-Auth-Request-User` | Username from Keycloak |
+| `X-Auth-Request-Email` | Email from Keycloak |
+
+### Architecture with API Access Control
+
+```
+Client (browser)
+  │  1st request: no cookie → GET /retail-banking/
+  ▼
+Global IngressGateway  ── AuthorizationPolicy CUSTOM ──▶  OAuth2 Proxy :4180
+  │                                                               │
+  │                                                         No session found
+  │                                                               │ 302
+  ▼                                                               ▼
+Browser redirected ──────────────────────────────▶  auth.mhnbank.xyz (Keycloak)
+  │                        user logs in                           │
+  │◀────────────────── 302 /oauth2/callback?code= ───────────────┘
+  │
+  ▼
+GET /oauth2/callback → IngressGateway → OAuth2 Proxy
+                                              │ exchanges code for tokens
+                                              ▼ Keycloak /token
+                                        stores in Redis
+                                              │ 302 + Set-Cookie
+  │◀────────────────────────────────────────-┘
+  │  resend with cookie
+  ▼
+Global IngressGateway  ── AuthorizationPolicy CUSTOM ──▶  OAuth2 Proxy :4180
+  │                                                         cookie valid → 200
+  │                                                         + X-Auth-Request-* headers
+  ▼ (mTLS into mesh)
+  ├─ /retail-banking/* → retail-banking-ingressgateway → customer-profile-svc
+  ├─ /payments/*       → payments-ingressgateway       → transfer-svc
+  └─ /grc/*            → grc-ingressgateway            → fraud-svc
+```
+
+### DNS requirements
+
+Create two CNAME records pointing to the same IngressGateway ELB:
+
+```
+finance.mhnbank.xyz  CNAME  <istio-ingressgateway ELB hostname>
+auth.mhnbank.xyz     CNAME  <istio-ingressgateway ELB hostname>
+```
+
+---
+
+## Verification Commands
 
 ```bash
 # 1. Confirm only 1 external LoadBalancer (global gateway)
@@ -329,13 +426,7 @@ istioctl x describe pod \
 | Global VS sends to wrong host | Copy-paste error in destination host FQDN | Verify `3-global-virtualservice.yaml` destinations end in `.svc.cluster.local` with correct namespace |
 | `301 Moved Permanently` with double-slash | Path prefix missing trailing slash | Use `/retail-banking/`, `/payments/`, `/grc/` (with trailing slash) in global VS match |
 | IngressGateway has no `EXTERNAL-IP` | AWS ELB still provisioning | Wait 2–3 min; check EC2 → Load Balancers in AWS console |
-| Kiali `lookup prometheus … no such host` | Prometheus not installed in `istio-system` | Install Prometheus: `helm upgrade --install prometheus prometheus-community/prometheus -n istio-system -f helm-values/prometheus-values.yaml` |
-
----
-
-## Test Cases
-
-### Path Routing
+| Kiali `lookup prometheus … no such host` | Prometheus not installed in `istio-system` | Install Prometheus in `istio-system` and point Kiali URL to `http://prometheus-server.istio-system.svc.cluster.local` |
 
 #### TC-04: Retail Banking path routing
 
@@ -385,6 +476,30 @@ istioctl x describe pod \
 
 ---
 
+### Negative Tests
+
+#### TC-08: Unknown path returns 404
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Host: finance.mhnbank.xyz" http://${ELB_HOSTNAME}/unknown/
+```
+
+**Expected:** `404`
+
+---
+
+#### TC-09: Wrong Host header returns 404
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Host: unknown.mhnbank.xyz" http://${ELB_HOSTNAME}/retail-banking/
+```
+
+**Expected:** `404`
+
+---
+
 ### SPIFFE Identity Verification
 
 Each microservice has a unique SPIFFE identity derived from its Kubernetes ServiceAccount:
@@ -392,9 +507,6 @@ Each microservice has a unique SPIFFE identity derived from its Kubernetes Servi
 | Service | Namespace | SPIFFE ID |
 |---|---|---|
 | `istio-ingressgateway` | `istio-system` | `spiffe://cluster.local/ns/istio-system/sa/istio-ingressgateway` |
-| `retail-banking-ingressgateway` | `retail-banking` | `spiffe://cluster.local/ns/retail-banking/sa/retail-banking-ingressgateway` |
-| `payments-ingressgateway` | `payments` | `spiffe://cluster.local/ns/payments/sa/payments-ingressgateway` |
-| `grc-ingressgateway` | `grc` | `spiffe://cluster.local/ns/grc/sa/grc-ingressgateway` |
 | `customer-profile-svc` | `retail-banking` | `spiffe://cluster.local/ns/retail-banking/sa/customer-profile-svc` |
 | `account-svc` | `retail-banking` | `spiffe://cluster.local/ns/retail-banking/sa/account-svc` |
 | `bank-statement-svc` | `retail-banking` | `spiffe://cluster.local/ns/retail-banking/sa/bank-statement-svc` |
@@ -407,9 +519,24 @@ Each microservice has a unique SPIFFE identity derived from its Kubernetes Servi
 
 #### TC-08: Verify SPIFFE certificate (SAN URI) for each service
 
-**Using `istioctl proxy-config secret` (recommended):**
+Extract the X.509 SVID from the Envoy sidecar and confirm the SPIFFE URI matches the expected identity:
 
 ```bash
+# Helper function — prints the SPIFFE URI from the leaf certificate of any pod
+spiffe_id() {
+  local pod ns
+  pod=$(kubectl get pod -n "$2" -l app="$1" -o jsonpath='{.items[0].metadata.name}')
+  ns="$2"
+  kubectl exec "$pod" -n "$ns" -c istio-proxy -- \
+    openssl s_client -connect localhost:15000 -showcerts </dev/null 2>/dev/null | \
+    openssl x509 -noout -text 2>/dev/null | grep -o 'URI:spiffe://[^ ]*'
+}
+```
+
+**Alternatively, use `istioctl proxy-config secret` (recommended):**
+
+```bash
+# Inspect the SVID of a pod — shows the SPIFFE URI in the Subject Alternative Name
 verify_spiffe() {
   local app=$1 ns=$2
   POD=$(kubectl get pod -n "$ns" -l app="$app" -o jsonpath='{.items[0].metadata.name}')
@@ -474,11 +601,36 @@ done
 
 ---
 
-#### TC-10: Verify AuthorizationPolicy enforces SPIFFE-based RBAC
-
-Confirm that each service only accepts connections from its authorised upstream:
+#### TC-10: Verify IngressGateway SPIFFE identity
 
 ```bash
+IGW_POD=$(kubectl get pod -n istio-system -l app=istio-ingressgateway \
+  -o jsonpath='{.items[0].metadata.name}')
+
+istioctl proxy-config secret "$IGW_POD" -n istio-system -o json \
+  | jq -r '
+      .dynamicActiveSecrets[]
+      | select(.name == "default")
+      | .secret.tlsCertificate.certificateChain.inlineBytes
+    ' \
+  | base64 -d \
+  | openssl x509 -noout -text \
+  | grep "URI:spiffe"
+```
+
+**Expected:**
+```
+URI:spiffe://cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account
+```
+
+---
+
+#### TC-11: Verify AuthorizationPolicy enforces SPIFFE-based RBAC
+
+Confirm that each service only accepts connections from its authorised upstream by checking what `AuthorizationPolicy` is applied:
+
+```bash
+# List all AuthorizationPolicies and their allowed principals
 kubectl get authorizationpolicy -A -o custom-columns=\
 'NAMESPACE:.metadata.namespace,NAME:.metadata.name,FROM:.spec.rules[*].from[*].source.principals[*]'
 ```
@@ -487,13 +639,13 @@ kubectl get authorizationpolicy -A -o custom-columns=\
 
 | Namespace | Policy | Allowed Principal |
 |---|---|---|
-| `retail-banking` | `allow-customer-profile-svc` | `cluster.local/ns/retail-banking/sa/retail-banking-ingressgateway` |
+| `retail-banking` | `allow-customer-profile-svc` | `cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account` |
 | `retail-banking` | `allow-account-svc` | `cluster.local/ns/retail-banking/sa/customer-profile-svc` |
 | `retail-banking` | `allow-bank-statement-svc` | `cluster.local/ns/retail-banking/sa/account-svc` |
-| `payments` | `allow-transfer-svc` | `cluster.local/ns/payments/sa/payments-ingressgateway` |
+| `payments` | `allow-transfer-svc` | `cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account` |
 | `payments` | `allow-payment-gateway-svc` | `cluster.local/ns/payments/sa/transfer-svc` |
 | `payments` | `allow-fx-svc` | `cluster.local/ns/payments/sa/payment-gateway-svc` |
-| `grc` | `allow-fraud-svc` | `cluster.local/ns/grc/sa/grc-ingressgateway` |
+| `grc` | `allow-fraud-svc` | `cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account` |
 | `grc` | `allow-audit-svc` | `cluster.local/ns/grc/sa/fraud-svc` |
 | `grc` | `allow-sanction-svc` | `cluster.local/ns/grc/sa/audit-svc` |
 
@@ -501,7 +653,7 @@ kubectl get authorizationpolicy -A -o custom-columns=\
 
 ### Negative Tests
 
-#### TC-11: Unknown path returns 404
+#### TC-12: Unknown path returns 404
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" \
@@ -512,7 +664,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 
 ---
 
-#### TC-12: Wrong Host header returns 404
+#### TC-13: Wrong Host header returns 404
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" \

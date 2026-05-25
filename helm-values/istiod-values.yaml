@@ -43,3 +43,31 @@ meshConfig:
   enableAutoMtls: true
   accessLogFile: /dev/stdout
   enableTracing: false
+
+  # ── External Authorization Provider (OAuth2 Proxy) ───────
+  # Registers OAuth2 Proxy as the ext_authz backend for the
+  # AuthorizationPolicy with action: CUSTOM in 6-api-access-control.yaml.
+  #
+  # Envoy sends an HTTP check request to OAuth2 Proxy on port 4180.
+  # headersToUpstreamOnAllow: forwarded to upstream on 200 OK response.
+  # headersToDownstreamOnDeny: forwarded to the client on deny/redirect.
+  # includeRequestHeadersInCheck: original request headers sent to OAuth2 Proxy.
+  extensionProviders:
+    - name: oauth2-proxy
+      envoyExtAuthzHttp:
+        service: oauth2-proxy.auth.svc.cluster.local
+        port: 4180
+        headersToUpstreamOnAllow:
+          - authorization
+          - cookie
+          - x-auth-request-access-token
+          - x-auth-request-user
+          - x-auth-request-email
+          - x-forwarded-access-token
+        headersToDownstreamOnDeny:
+          - content-type
+          - set-cookie
+          - location
+        includeRequestHeadersInCheck:
+          - authorization
+          - cookie

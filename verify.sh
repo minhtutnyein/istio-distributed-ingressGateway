@@ -148,17 +148,17 @@ else
 fi
 
 # =============================================================================
-# CHECK 6 — AuthorizationPolicies (9 policies)
+# CHECK 6 — AuthorizationPolicies (10: 9 service-level + 1 CUSTOM gateway)
 # =============================================================================
-step "Check 6 — AuthorizationPolicies (9 service-level RBAC policies)"
+step "Check 6 — AuthorizationPolicies (9 service-level + 1 CUSTOM gateway = 10)"
 kubectl get authorizationpolicy -A
 echo ""
 
 AP_COUNT=$(kubectl get authorizationpolicy -A --no-headers 2>/dev/null | wc -l)
-if [[ "$AP_COUNT" -eq 9 ]]; then
-  ok "9 AuthorizationPolicies present"
+if [[ "$AP_COUNT" -eq 10 ]]; then
+  ok "10 AuthorizationPolicies present (9 service-level SPIFFE + 1 CUSTOM ext_authz)"
 else
-  fail "Expected 9 AuthorizationPolicies, found $AP_COUNT"
+  fail "Expected 10 AuthorizationPolicies, found $AP_COUNT"
 fi
 
 # =============================================================================
@@ -399,6 +399,146 @@ done
 for app in fraud-svc audit-svc sanction-svc; do
   mtls_check "$app" grc
 done
+
+# =============================================================================
+# CHECK 12 — API Access Control (OAuth2 Proxy + Keycloak + CUSTOM AuthZ)
+# =============================================================================
+step "Check 12 — API Access Control: OAuth2 Proxy / Keycloak ext_authz"
+
+echo ""
+hdr "── CUSTOM AuthorizationPolicy (istio-system) ──"
+kubectl get authorizationpolicy -n istio-system 2>/dev/null
+echo ""
+
+AP_CUSTOM=$(kubectl get authorizationpolicy ext-authz-oauth2-proxy -n istio-system \
+  -o jsonpath='{.spec.action}' 2>/dev/null || echo "")
+if [[ "$AP_CUSTOM" == "CUSTOM" ]]; then
+  ok "ext-authz-oauth2-proxy: action=CUSTOM (delegates to OAuth2 Proxy)"
+else
+  fail "ext-authz-oauth2-proxy not found or action != CUSTOM (got: '$AP_CUSTOM')"
+fi
+
+AP_PROVIDER=$(kubectl get authorizationpolicy ext-authz-oauth2-proxy -n istio-system \
+  -o jsonpath='{.spec.provider.name}' 2>/dev/null || echo "")
+if [[ "$AP_PROVIDER" == "oauth2-proxy" ]]; then
+  ok "  provider: $AP_PROVIDER (matches meshConfig extensionProviders)"
+else
+  fail "  provider: '$AP_PROVIDER' (expected 'oauth2-proxy')"
+fi
+
+echo ""
+hdr "── MeshConfig extensionProviders ──"
+EXT_PROVIDER=$(kubectl get configmap istio -n istio-system \
+  -o jsonpath='{.data.mesh}' 2>/dev/null | grep -c "oauth2-proxy" || echo "0")
+if [[ "$EXT_PROVIDER" -ge 1 ]]; then
+  ok "extensionProvider 'oauth2-proxy' found in istio MeshConfig"
+else
+  fail "extensionProvider 'oauth2-proxy' NOT found in istio MeshConfig — re-run: helm upgrade istiod -f helm-values/istiod-values.yaml"
+fi
+
+echo ""
+hdr "── OAuth2 Proxy (auth namespace) ──"
+kubectl get pods -n auth 2>/dev/null
+echo ""
+
+OAUTH2_POD=$(kubectl get pod -n auth -l app=oauth2-proxy \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+if [[ -n "$OAUTH2_POD" ]]; then
+  OAUTH2_READY=$(kubectl get pod "$OAUTH2_POD" -n auth \
+    -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+  if [[ "$OAUTH2_READY" == "true" ]]; then
+    ok "OAuth2 Proxy pod ready: $OAUTH2_POD"
+  else
+    fail "OAuth2 Proxy pod not ready: $OAUTH2_POD"
+  fi
+else
+  fail "OAuth2 Proxy pod not found in auth namespace"
+fi
+
+REDIS_POD=$(kubectl get pod -n auth -l app=redis \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+if [[ -n "$REDIS_POD" ]]; then
+  REDIS_READY=$(kubectl get pod "$REDIS_POD" -n auth \
+    -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+  if [[ "$REDIS_READY" == "true" ]]; then
+    ok "Redis pod ready: $REDIS_POD"
+  else
+    fail "Redis pod not ready: $REDIS_POD"
+  fi
+else
+  fail "Redis pod not found in auth namespace"
+fi
+
+echo ""
+hdr "── Keycloak (keycloak namespace) ──"
+kubectl get pods -n keycloak 2>/dev/null
+echo ""
+
+KEYCLOAK_POD=$(kubectl get pod -n keycloak -l app.kubernetes.io/name=keycloak \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+if [[ -n "$KEYCLOAK_POD" ]]; then
+  KC_READY=$(kubectl get pod "$KEYCLOAK_POD" -n keycloak \
+    -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+  if [[ "$KC_READY" == "true" ]]; then
+    ok "Keycloak pod ready: $KEYCLOAK_POD"
+  else
+    fail "Keycloak pod not ready: $KEYCLOAK_POD"
+  fi
+else
+  fail "Keycloak pod not found in keycloak namespace"
+fi
+
+echo ""
+hdr "── VirtualServices include /oauth2/ route and keycloak-vs ──"
+OAUTH2_ROUTE=$(kubectl get virtualservice global-virtualservice -n istio-system \
+  -o jsonpath='{.spec.http[*].match[*].uri.prefix}' 2>/dev/null | grep -c "/oauth2/" || echo "0")
+if [[ "$OAUTH2_ROUTE" -ge 1 ]]; then
+  ok "global-virtualservice has /oauth2/ route → OAuth2 Proxy"
+else
+  fail "/oauth2/ route missing from global-virtualservice"
+fi
+
+KC_VS=$(kubectl get virtualservice keycloak-vs -n istio-system \
+  -o jsonpath='{.metadata.name}' 2>/dev/null || echo "")
+if [[ "$KC_VS" == "keycloak-vs" ]]; then
+  ok "keycloak-vs present (auth.mhnbank.xyz → Keycloak)"
+else
+  fail "keycloak-vs not found in istio-system"
+fi
+
+echo ""
+hdr "── Negative test: unauthenticated request to protected paths ──"
+if [[ -z "$INGRESS_HOST" ]]; then
+  warn "ELB hostname not available — skipping unauthenticated access tests"
+else
+  test_unauth() {
+    local label=$1 path=$2
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+      -H "Host: finance.mhnbank.xyz" \
+      "http://${INGRESS_HOST}${path}" 2>/dev/null)
+    # OAuth2 Proxy returns 302 redirect to Keycloak login for unauthenticated requests
+    if [[ "$HTTP_CODE" == "302" || "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
+      ok "  $label: unauthenticated → HTTP $HTTP_CODE (redirected to Keycloak login)"
+    else
+      fail "  $label: unauthenticated → HTTP $HTTP_CODE (expected 302/401/403)"
+    fi
+  }
+
+  test_unauth "retail-banking" "/retail-banking/"
+  test_unauth "payments"       "/payments/"
+  test_unauth "grc"            "/grc/"
+
+  echo ""
+  hdr "── /oauth2/ route reachable (OAuth2 Proxy ping) ──"
+  PING_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+    -H "Host: finance.mhnbank.xyz" \
+    "http://${INGRESS_HOST}/oauth2/ping" 2>/dev/null)
+  if [[ "$PING_CODE" == "200" ]]; then
+    ok "/oauth2/ping → 200 OK (OAuth2 Proxy reachable via IngressGateway)"
+  else
+    fail "/oauth2/ping → HTTP $PING_CODE (expected 200)"
+  fi
+fi
 
 # =============================================================================
 # Summary

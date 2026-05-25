@@ -60,6 +60,8 @@ helm repo add prometheus-community https://prometheus-community.github.io/helm-c
 helm repo add kiali              https://kiali.org/helm-charts                               2>/dev/null || true
 helm repo update
 ok "Helm repos ready"
+# Note: Keycloak uses an OCI chart (oci://registry-1.docker.io/bitnamicharts/keycloak)
+# — no repo add needed, helm pulls it directly.
 
 # =============================================================================
 # STEP 2 — Istio base (CRDs)
@@ -76,14 +78,16 @@ ok "istio-base installed"
 # =============================================================================
 # STEP 3 — istiod (control plane)
 # =============================================================================
-step "Step 3 — Install istiod (control plane)"
+step "Step 3 — Install istiod (control plane + OAuth2 Proxy extensionProvider)"
+# istiod-values.yaml includes meshConfig.extensionProviders registering
+# the OAuth2 Proxy as the "oauth2-proxy" ext_authz backend.
 helm upgrade --install istiod istio/istiod \
   -n istio-system \
   --version "$ISTIO_VERSION" \
   -f helm-values/istiod-values.yaml \
   --wait
 kubectl rollout status deployment/istiod -n istio-system --timeout=120s
-ok "istiod running"
+ok "istiod running (extensionProvider oauth2-proxy registered)"
 
 # =============================================================================
 # STEP 4 — Domain namespaces (sidecar injection enabled)
@@ -152,24 +156,99 @@ kubectl get svc -n payments       payments-ingressgateway       -o jsonpath='{.s
 kubectl get svc -n grc            grc-ingressgateway            -o jsonpath='{.spec.type}' && echo " (grc)"
 
 # =============================================================================
-# STEP 7 — Global Gateway CR + mTLS + VirtualService + DestinationRules + AuthZ
+# STEP 6b — Keycloak Identity Provider
 # =============================================================================
-step "Step 7 — Apply Istio policy resources"
+step "Step 6b — Deploy Keycloak (Identity Provider — official image, no Helm)"
+kubectl apply -f apps/keycloak/namespace.yaml
+kubectl apply -f apps/keycloak/realm-import.yaml
+kubectl apply -f apps/keycloak/keycloak.yaml
+
+echo "Waiting for Keycloak to be ready (first startup imports realm — allow 2-3 min)..."
+kubectl rollout status deployment/keycloak -n keycloak --timeout=300s
+ok "Keycloak ready"
+
+KEYCLOAK_IP=$(kubectl get svc keycloak -n keycloak \
+  -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+ok "Keycloak ClusterIP: $KEYCLOAK_IP (accessible via auth.mhnbank.xyz through IngressGateway)"
+
+# =============================================================================
+# STEP 6c — Istio routing (must be in place before OAuth2 Proxy starts)
+# =============================================================================
+# OAuth2 Proxy contacts auth.mhnbank.xyz at startup for OIDC discovery.
+# The Gateway CR + VirtualServices must be applied first so Envoy can route
+# that hostname to Keycloak before the OAuth2 Proxy pod initialises.
+# =============================================================================
+step "Step 6c — Apply Istio Gateway CR + VirtualServices (routing first)"
 
 kubectl apply -f 1-istio-gateway-global.yaml
-ok "Global Gateway CR applied"
+ok "Global Gateway CR applied (binds finance.mhnbank.xyz + auth.mhnbank.xyz on :80)"
+
+kubectl apply -f 3-global-virtualservice.yaml
+ok "Global VirtualService applied (includes /oauth2/ → oauth2-proxy route)"
+
+kubectl apply -f 3b-keycloak-virtualservice.yaml
+ok "Keycloak VirtualService applied (auth.mhnbank.xyz → keycloak:80)"
+
+echo ""
+warn "DNS PREREQUISITE:"
+warn "  auth.mhnbank.xyz    must CNAME to: ${INGRESS_HOST:-<ELB hostname from Step 5>}"
+warn "  finance.mhnbank.xyz must CNAME to: ${INGRESS_HOST:-<ELB hostname from Step 5>}"
+warn "  OAuth2 Proxy resolves auth.mhnbank.xyz externally for OIDC discovery."
+warn "  If DNS is not yet configured, OAuth2 Proxy will CrashLoopBackOff."
+warn ""
+warn "ACTION REQUIRED — update these files before continuing:"
+warn "  apps/auth/oauth2-proxy-secret.yaml:"
+warn "    OAUTH2_PROXY_CLIENT_SECRET — must match Keycloak client 'oauth2-proxy-client' secret"
+warn "    OAUTH2_PROXY_COOKIE_SECRET — exactly 32 raw characters (not base64), e.g.:"
+warn "      python3 -c \"import random,string; \\"
+warn "        print(''.join(random.choices(string.ascii_letters+string.digits+'!@#',k=32)))\""
+warn "  apps/auth/oauth2-proxy.yaml args:"
+warn "    --oidc-issuer-url — replace auth.mhnbank.xyz with your Keycloak hostname"
+warn "    --redirect-url    — replace finance.mhnbank.xyz with your ELB hostname"
+warn ""
+
+# =============================================================================
+# STEP 6d — OAuth2 Proxy + Redis (ext_authz backend)
+# =============================================================================
+step "Step 6d — Deploy OAuth2 Proxy + Redis (ext_authz backend)"
+kubectl apply -f apps/auth/namespace.yaml
+kubectl apply -f apps/auth/redis.yaml
+kubectl apply -f apps/auth/oauth2-proxy-secret.yaml
+kubectl apply -f apps/auth/oauth2-proxy.yaml
+
+# Restart OAuth2 Proxy so it always picks up the current secret value.
+# kubectl apply only restarts the pod when the Deployment spec changes;
+# a Secret-only update (e.g. rotating the cookie secret) is silently ignored.
+kubectl rollout restart deployment/oauth2-proxy -n auth
+
+echo "Waiting for Redis..."
+kubectl rollout status deployment/redis -n auth --timeout=60s
+ok "Redis ready"
+
+echo "Waiting for OAuth2 Proxy (OIDC discovery may take ~30s)..."
+kubectl rollout status deployment/oauth2-proxy -n auth --timeout=120s
+ok "OAuth2 Proxy ready"
+
+echo ""
+echo "Auth namespace pods:"
+kubectl get pods -n auth
+
+# =============================================================================
+# STEP 7 — mTLS + DestinationRules + AuthorizationPolicies
+# =============================================================================
+step "Step 7 — Apply mTLS + DestinationRules + AuthorizationPolicies"
 
 kubectl apply -f 2-mtls-peer-authentication.yaml
 ok "PeerAuthentication STRICT applied"
-
-kubectl apply -f 3-global-virtualservice.yaml
-ok "Global VirtualService applied"
 
 kubectl apply -f 4-mtls-destination-rules.yaml
 ok "DestinationRules (ISTIO_MUTUAL) applied"
 
 kubectl apply -f 5-authorization-policies.yaml
-ok "AuthorizationPolicies applied"
+ok "AuthorizationPolicies (service-level SPIFFE RBAC) applied"
+
+kubectl apply -f 6-api-access-control.yaml
+ok "API Access Control (CUSTOM AuthorizationPolicy → OAuth2 Proxy ext_authz) applied"
 
 echo ""
 echo "PeerAuthentication policies:"
@@ -180,8 +259,12 @@ echo "DestinationRules:"
 kubectl get destinationrule -A
 
 echo ""
-echo "AuthorizationPolicies:"
+echo "AuthorizationPolicies (9 service-level + 1 CUSTOM gateway = 10 total):"
 kubectl get authorizationpolicy -A
+
+echo ""
+echo "VirtualServices (including keycloak-vs and /oauth2/ route):"
+kubectl get virtualservice -A
 
 # =============================================================================
 # STEP 8 — Domain app resources
@@ -281,7 +364,7 @@ echo -e "${BOLD}5. DestinationRules${NC}"
 kubectl get destinationrule -A
 
 echo ""
-echo -e "${BOLD}6. AuthorizationPolicies${NC}"
+echo -e "${BOLD}6. AuthorizationPolicies (9 service-level + 1 CUSTOM gateway = 10)${NC}"
 kubectl get authorizationpolicy -A
 
 echo ""

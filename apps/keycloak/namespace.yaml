@@ -1,0 +1,14 @@
+# ============================================================
+# apps/keycloak/namespace.yaml
+# Purpose:  Namespace for Keycloak Identity Provider.
+#           Sidecar injection is disabled — Keycloak is
+#           deployed via Helm and must accept plain HTTP
+#           from OAuth2 Proxy for internal token exchanges.
+# ============================================================
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+  labels:
+    istio-injection: disabled

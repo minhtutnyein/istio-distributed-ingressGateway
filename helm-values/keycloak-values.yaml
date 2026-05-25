@@ -1,0 +1,78 @@
+# ============================================================
+# helm-values/keycloak-values.yaml
+# Purpose:  PRODUCTION REFERENCE ONLY — not used in deploy.sh.
+#
+# The demo deployment uses apps/keycloak/keycloak.yaml (official
+# quay.io/keycloak/keycloak:24.0.5 image, start-dev + H2 in-memory).
+#
+# To migrate to production with Bitnami Helm + PostgreSQL:
+#   helm upgrade --install keycloak \
+#     oci://registry-1.docker.io/bitnamicharts/keycloak \
+#     --version <check latest stable with existing image on Docker Hub> \
+#     -n keycloak --create-namespace \
+#     -f helm-values/keycloak-values.yaml --wait --timeout=5m
+#
+# IMPORTANT: Change adminPassword and postgresql.auth.password first.
+# ============================================================
+
+# ── Admin credentials ────────────────────────────────────────
+auth:
+  adminUser: admin
+  adminPassword: "Admin@MHNBank2025"   # change in production
+
+# ── Single replica for demo ──────────────────────────────────
+replicaCount: 1
+
+# ── Service — ClusterIP only; exposed via Istio IngressGateway ─
+service:
+  type: ClusterIP
+  ports:
+    http: 80
+
+# ── No Kubernetes Ingress — Istio handles routing ────────────
+ingress:
+  enabled: false
+
+# ── Database — bundled PostgreSQL sub-chart ──────────────────
+# Bitnami Keycloak 25.x dropped the H2 embedded mode.
+# The sub-chart deploys a single-replica PostgreSQL pod alongside Keycloak.
+# For production, disable this and set externalDatabase.* instead.
+postgresql:
+  enabled: true
+  auth:
+    username: keycloak
+    password: "keycloak-db-pass"   # change in production
+    database: keycloak
+
+# ── Keycloak proxy mode (running behind Istio IngressGateway) ─
+proxy: edge
+
+# ── Realm import via keycloakConfigCli ───────────────────────
+# The init container reads JSON from the mounted ConfigMap and
+# imports the realm into Keycloak on first startup.
+keycloakConfigCli:
+  enabled: true
+  existingConfigmap: "keycloak-realm-import"
+
+# ── Resource sizing ──────────────────────────────────────────
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# ── Health probes ────────────────────────────────────────────
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 60
+  periodSeconds: 20
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 10
+
+# ── Cache — disabled for single-replica demo ─────────────────
+cache:
+  enabled: false
