@@ -701,58 +701,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
   4. The authenticated user's identity is passed securely to backend services via HTTP headers
 
   ---
-  Key Security Properties
-
-  ┌────────────────────────────────┬─────────────────────────────────────────────────────────────────────────┐
-  │            Property            │                             Implementation                              │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Single public entry point      │ One AWS load balancer for the entire platform                           │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Namespace isolation            │ Each domain is in a separate Kubernetes namespace, unreachable directly │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Encrypted internal traffic     │ mTLS on every service-to-service connection                             │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Service identity verification  │ SPIFFE certificates — each service proves who it is cryptographically   │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Least-privilege access control │ Each service only accepts calls from its one authorized upstream        │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ User authentication            │ OAuth2/OIDC via Keycloak — industry standard                            │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Observability                  │ Kiali dashboard shows live service topology and confirms mTLS is active │
-  └────────────────────────────────┴─────────────────────────────────────────────────────────────────────────┘
-
-  ---
-  Business Domains Covered
-
-  ┌─────────────────────────────────────┬───────────────────────────────────────────────┐
-  │               Domain                │                   Services                    │
-  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
-  │ Retail Banking                      │ Customer Profile → Account → Bank Statement   │
-  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Service identity verification  │ SPIFFE certificates — each service proves who it is cryptographically   │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Least-privilege access control │ Each service only accepts calls from its one authorized upstream        │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ User authentication            │ OAuth2/OIDC via Keycloak — industry standard                            │
-  ├────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
-  │ Observability                  │ Kiali dashboard shows live service topology and confirms mTLS is active │
-  └────────────────────────────────┴─────────────────────────────────────────────────────────────────────────┘
-
-  ---
-  Business Domains Covered
-
-  ┌─────────────────────────────────────┬───────────────────────────────────────────────┐
-  │               Domain                │                   Services                    │
-  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
-  │ Retail Banking                      │ Customer Profile → Account → Bank Statement   │
-  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
-  │ Payments                            │ Transfer → Payment Gateway → FX               │
-  ├─────────────────────────────────────┼───────────────────────────────────────────────┤
-  │ GRC (Governance, Risk & Compliance) │ Fraud Detection → Audit → Sanctions Screening │
-  └─────────────────────────────────────┴───────────────────────────────────────────────┘
-
-  ---
+  
   Infrastructure
 
   - Cloud: AWS (Singapore region, ap-southeast-1)
