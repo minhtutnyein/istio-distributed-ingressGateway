@@ -1,0 +1,28 @@
+# ============================================================
+# 0-gatewayclass-domains.yaml  →  Domain namespace declarations
+# Replaces: Kong domain GatewayClass resources + domain KIC Helm installs
+# Purpose:  Declare domain namespaces and enable Istio sidecar injection.
+#           No domain-level gateways are needed — Istio sidecars provide
+#           automatic mTLS between all services inside the mesh.
+# ============================================================
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: retail-banking
+  labels:
+    istio-injection: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: payments
+  labels:
+    istio-injection: enabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: grc
+  labels:
+    istio-injection: enabled

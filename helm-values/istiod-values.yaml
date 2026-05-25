@@ -1,0 +1,45 @@
+# ============================================================
+# helm-values/istiod-values.yaml
+# Purpose:  Helm values for istio/istiod — the Istio control plane.
+#
+# Install:
+#   helm install istiod istio/istiod -n istio-system \
+#     -f helm-values/istiod-values.yaml --wait
+# ============================================================
+
+global:
+  # SPIFFE trust domain — must match istio-base
+  trustDomain: "cluster.local"
+
+  # Sidecar proxy resource sizing for EKS
+  proxy:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+pilot:
+  autoscaleEnabled: true
+  autoscaleMin: 1
+  autoscaleMax: 3
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Enable Kubernetes Service Account token projection for SPIFFE/X.509
+  env:
+    PILOT_ENABLE_WORKLOAD_ENTRY_AUTOREGISTRATION: "true"
+
+meshConfig:
+  # Enforce mTLS across the mesh — PeerAuthentication STRICT takes effect
+  enableAutoMtls: true
+  accessLogFile: /dev/stdout
+  enableTracing: false

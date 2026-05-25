@@ -1,0 +1,37 @@
+# ============================================================
+# helm-values/grc-ingress-values.yaml
+# Purpose:  Helm values for the grc namespace
+#           IngressGateway (istio/gateway chart).
+#           This gateway is internal-only (ClusterIP) and
+#           receives traffic forwarded by the global gateway.
+#
+# Install:
+#   helm install grc-ingressgateway istio/gateway \
+#     -n grc \
+#     -f helm-values/grc-ingress-values.yaml
+# ============================================================
+
+# Internal ClusterIP — not exposed to the internet
+service:
+  type: ClusterIP
+  ports:
+    - name: http2
+      port: 80
+      protocol: TCP
+      targetPort: 8080
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+
+# Labels must match the selector in apps/risk-compliance/gateway.yaml
+labels:
+  istio: grc-ingressgateway
+  app: grc-ingressgateway

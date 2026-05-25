@@ -1,0 +1,70 @@
+# ============================================================
+# helm-values/kiali-values.yaml
+# Purpose:  Kiali — Istio service mesh observability dashboard.
+#           Visualises mTLS topology, traffic flow, and config validation.
+#           Requires Prometheus (deploy prometheus-values.yaml first).
+#
+# Add repo:
+#   helm repo add kiali https://kiali.org/helm-charts
+#   helm repo update
+#
+# Install:
+#   helm install kiali-operator kiali/kiali-operator \
+#     -n kiali-operator --create-namespace \
+#     -f helm-values/kiali-values.yaml
+#
+# Access (port-forward):
+#   kubectl port-forward -n istio-system svc/kiali 20001:20001
+#   Open: http://localhost:20001/kiali
+#
+# Or via LoadBalancer (service_type: LoadBalancer below):
+#   kubectl get svc kiali -n istio-system
+# ============================================================
+
+cr:
+  create: true
+  namespace: istio-system
+  spec:
+    auth:
+      strategy: anonymous   # change to token or openid for production
+    deployment:
+      accessible_namespaces:
+        - "retail-banking"
+        - "payments"
+        - "grc"
+        - "istio-system"
+      service_type: LoadBalancer
+      # Namespace where the Kiali CR and pod will be created
+      namespace: istio-system
+    external_services:
+      prometheus:
+        url: "http://prometheus-server.istio-system.svc.cluster.local"
+        cache_enabled: true
+        cache_duration: 7
+        cache_expiration: 300
+      grafana:
+        enabled: false
+      istio:
+        root_namespace: istio-system
+    health_config:
+      rate:
+        # Do not raise Degraded/Failure alerts on the ingressgateway itself.
+        # Internet scanners hitting the ELB constantly skew the error rate.
+        - namespace: istio-system
+          kind: app
+          name: istio-ingressgateway
+          tolerance:
+            - code: "^4..$"
+              degraded: 0
+              failure: 100
+            - code: "^5..$"
+              degraded: 0
+              failure: 100
+    kiali_feature_flags:
+      validations:
+        ignore:
+          - KIA1301
+          - KIA1317
+    server:
+      web_root: /kiali
+

@@ -1,0 +1,35 @@
+# ============================================================
+# 1-kong-api-gateway-global.yaml  →  Istio IngressGateway resource
+# Replaces: Global Kong Gateway + global-api-gateway-ns namespace
+# Purpose:  Istio Gateway binds to the istio-ingressgateway pod
+#           (the single LoadBalancer) and accepts traffic on
+#           port 80/443 for finance.mhnbank.xyz.
+#           VirtualService (file 2-downstream-proxy-services.yaml)
+#           handles path-based routing into the mesh.
+# ============================================================
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: global-istio-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "finance.mhnbank.xyz"
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: finance-mhnbank-xyz-tls   # K8s Secret with TLS cert
+      hosts:
+        - "finance.mhnbank.xyz"
+---

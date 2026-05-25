@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-svc
+  namespace: grc
+spec:
+  selector:
+    app: audit-svc
+  ports:
+    - name: http
+      port: 6062
+      targetPort: 9092
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: audit-svc
+  namespace: grc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-svc
+  namespace: grc
+  labels:
+    app: audit-svc
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-svc
+  template:
+    metadata:
+      labels:
+        app: audit-svc
+        version: v1
+    spec:
+      serviceAccountName: audit-svc
+      containers:
+        - name: audit-svc
+          image: nicholasjackson/fake-service:v0.26.2
+          ports:
+            - containerPort: 9092
+          env:
+            - name: LISTEN_ADDR
+              value: 0.0.0.0:9092
+            - name: UPSTREAM_URIS
+              value: http://sanction-svc.grc.svc.cluster.local:6063
+            - name: NAME
+              value: audit-svc
+            - name: MESSAGE
+              value: "MHN Bank | risk-compliance | audit"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"

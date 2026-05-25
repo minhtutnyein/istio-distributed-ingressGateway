@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraud-svc
+  namespace: grc
+spec:
+  selector:
+    app: fraud-svc
+  ports:
+    - name: http
+      port: 6061
+      targetPort: 9091
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fraud-svc
+  namespace: grc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-svc
+  namespace: grc
+  labels:
+    app: fraud-svc
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraud-svc
+  template:
+    metadata:
+      labels:
+        app: fraud-svc
+        version: v1
+    spec:
+      serviceAccountName: fraud-svc
+      containers:
+        - name: fraud-svc
+          image: nicholasjackson/fake-service:v0.26.2
+          ports:
+            - containerPort: 9091
+          env:
+            - name: LISTEN_ADDR
+              value: 0.0.0.0:9091
+            - name: UPSTREAM_URIS
+              value: http://audit-svc.grc.svc.cluster.local:6062
+            - name: NAME
+              value: fraud-svc
+            - name: MESSAGE
+              value: "MHN Bank | risk-compliance | fraud"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"

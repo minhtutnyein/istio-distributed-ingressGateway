@@ -1,0 +1,29 @@
+# ============================================================
+# apps/retail-banking/virtualservice.yaml
+# Purpose:  VirtualService bound to retail-banking-gateway.
+#           Routes entry traffic from namespace IngressGateway to
+#           customer-profile-svc with timeout + retry policy.
+# Call chain: retail-banking-ingressgateway → customer-profile-svc → account-svc → bank-statement-svc
+# ============================================================
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: retail-banking-vs
+  namespace: retail-banking
+spec:
+  hosts:
+    - "finance.mhnbank.xyz"
+  gateways:
+    - retail-banking-gateway
+  http:
+    - route:
+        - destination:
+            host: customer-profile-svc
+            port:
+              number: 8081
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: gateway-error,connect-failure,retriable-4xx

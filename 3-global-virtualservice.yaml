@@ -1,0 +1,83 @@
+# ============================================================
+# 3-global-virtualservice.yaml
+# Purpose:  Two-tier routing — global IngressGateway (TLS) forwards to
+#           per-namespace IngressGateways (mTLS) based on path prefix.
+#           URI prefix is stripped (rewrite to /) before forwarding.
+# Flow:  client → HTTPS → global-gw → mTLS → <ns>-ingressgateway → app
+# ============================================================
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: global-virtualservice
+  namespace: istio-system
+spec:
+  hosts:
+    - "finance.mhnbank.xyz"
+  gateways:
+    - global-istio-gateway
+  http:
+    # Redirect no-trailing-slash URLs to canonical paths.
+    - match:
+        - uri:
+            exact: /retail-banking
+      redirect:
+        uri: /retail-banking/
+
+    - match:
+        - uri:
+            exact: /payments
+      redirect:
+        uri: /payments/
+
+    - match:
+        - uri:
+            exact: /grc
+      redirect:
+        uri: /grc/
+
+    # /retail-banking/* → retail-banking namespace IngressGateway
+    - match:
+        - uri:
+            prefix: /retail-banking/
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: retail-banking-ingressgateway.retail-banking.svc.cluster.local
+            port:
+              number: 80
+
+    # /payments/* → payments namespace IngressGateway
+    - match:
+        - uri:
+            prefix: /payments/
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: payments-ingressgateway.payments.svc.cluster.local
+            port:
+              number: 80
+
+    # /grc/* → grc namespace IngressGateway
+    - match:
+        - uri:
+            prefix: /grc/
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: grc-ingressgateway.grc.svc.cluster.local
+            port:
+              number: 80
+
+    # Catch-all: return 200 for all unmatched paths (/, /favicon.ico, scanners, etc.)
+    # Prevents 404 NR route_not_found from polluting Kiali traffic health.
+    - match:
+        - uri:
+            prefix: /
+      directResponse:
+        status: 200
+        body:
+          string: "MHN Bank API Gateway"

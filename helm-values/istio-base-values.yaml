@@ -1,0 +1,17 @@
+# ============================================================
+# helm-values/istio-base-values.yaml
+# Purpose:  Helm values for istio/base — installs Istio CRDs.
+#
+# Install:
+#   helm repo add istio https://istio-release.storage.googleapis.com/charts
+#   helm repo update
+#   helm install istio-base istio/base -n istio-system --create-namespace \
+#     -f helm-values/istio-base-values.yaml
+# ============================================================
+
+# Enable validation webhook for Istio CRDs
+defaultRevision: default
+
+global:
+  # Trust domain for SPIFFE certificates
+  trustDomain: "cluster.local"

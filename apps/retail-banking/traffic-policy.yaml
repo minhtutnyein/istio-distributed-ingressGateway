@@ -1,0 +1,48 @@
+# ============================================================
+# Replaces: Kong HTTPRoute for retail-banking
+# Purpose:  Istio traffic management policies for retail-banking.
+# Entry: customer-profile-svc → account-svc → bank-statement-svc
+# Note: customer-profile-svc timeout/retry is merged into virtualservice.yaml
+# ============================================================
+---
+# Retry + timeout on account-svc
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: account-svc-traffic-policy
+  namespace: retail-banking
+spec:
+  hosts:
+    - account-svc
+  http:
+    - route:
+        - destination:
+            host: account-svc
+            port:
+              number: 8082
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: gateway-error,connect-failure,retriable-4xx
+---
+# Retry + timeout on bank-statement-svc
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: bank-statement-svc-traffic-policy
+  namespace: retail-banking
+spec:
+  hosts:
+    - bank-statement-svc
+  http:
+    - route:
+        - destination:
+            host: bank-statement-svc
+            port:
+              number: 8083
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: gateway-error,connect-failure,retriable-4xx

@@ -1,0 +1,51 @@
+# ============================================================
+# 2-downstream-proxy-services.yaml  →  mTLS PeerAuthentication policies
+# Replaces: ExternalName bridge services to domain Kong ClusterIP proxies
+# Purpose:  Enforce mTLS STRICT mode per namespace so that only
+#           traffic from Istio-injected sidecars (with valid SPIFFE
+#           certificates) can reach services.
+#           Domain KIC proxy services no longer exist — Istio sidecars
+#           handle service-to-service encryption automatically.
+# ============================================================
+
+# Mesh-wide STRICT mTLS — applies to every namespace in the mesh.
+# Individual namespace policies below override for explicitness.
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-mtls-strict
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+---
+# Explicit STRICT policy for retail-banking namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: retail-banking-mtls-strict
+  namespace: retail-banking
+spec:
+  mtls:
+    mode: STRICT
+---
+# Explicit STRICT policy for payments namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: payments-mtls-strict
+  namespace: payments
+spec:
+  mtls:
+    mode: STRICT
+---
+# Explicit STRICT policy for grc namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: grc-mtls-strict
+  namespace: grc
+spec:
+  mtls:
+    mode: STRICT

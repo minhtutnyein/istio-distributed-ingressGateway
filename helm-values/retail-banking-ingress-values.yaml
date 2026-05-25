@@ -1,0 +1,37 @@
+# ============================================================
+# helm-values/retail-banking-ingress-values.yaml
+# Purpose:  Helm values for the retail-banking namespace
+#           IngressGateway (istio/gateway chart).
+#           This gateway is internal-only (ClusterIP) and
+#           receives traffic forwarded by the global gateway.
+#
+# Install:
+#   helm install retail-banking-ingressgateway istio/gateway \
+#     -n retail-banking \
+#     -f helm-values/retail-banking-ingress-values.yaml
+# ============================================================
+
+# Internal ClusterIP — not exposed to the internet
+service:
+  type: ClusterIP
+  ports:
+    - name: http2
+      port: 80
+      protocol: TCP
+      targetPort: 8080
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+
+# Labels must match the selector in apps/retail-banking/gateway.yaml
+labels:
+  istio: retail-banking-ingressgateway
+  app: retail-banking-ingressgateway

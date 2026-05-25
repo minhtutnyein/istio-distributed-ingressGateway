@@ -1,0 +1,120 @@
+# ============================================================
+# helm-values/prometheus-values.yaml
+# Purpose:  Prometheus metrics collection for the Istio mesh.
+#           Works with Kiali for traffic topology and config analysis.
+#
+# Add repo:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#
+# Install:
+#   helm install prometheus prometheus-community/prometheus \
+#     -n istio-system \
+#     -f helm-values/prometheus-values.yaml
+#
+# Access (port-forward):
+#   kubectl port-forward -n istio-system svc/prometheus-server 9090:80
+# ============================================================
+
+server:
+  service:
+    type: ClusterIP         # accessed via Kiali or port-forward only
+  persistentVolume:
+    enabled: false          # emptyDir — data lost on pod restart (add PVC for production)
+  global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+
+# Disable components not needed for Istio monitoring
+alertmanager:
+  enabled: false
+
+prometheus-pushgateway:
+  enabled: false
+
+kube-state-metrics:
+  enabled: true
+
+# Additional scrape jobs for Istio Envoy proxies and control plane
+extraScrapeConfigs: |
+  # Scrape Istio Envoy sidecar + gateway metrics
+  # Istio injects prometheus.io/scrape annotations on all sidecar-injected pods
+  - job_name: 'istio-mesh'
+    kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names:
+        - istio-system
+        - retail-banking
+        - payments
+        - grc
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+      action: keep
+      regex: "true"
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+      action: replace
+      target_label: __metrics_path__
+      regex: (.+)
+    - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+      action: replace
+      regex: ([^:]+)(?::\d+)?;(\d+)
+      replacement: $1:$2
+      target_label: __address__
+    - action: labelmap
+      regex: __meta_kubernetes_pod_label_(.+)
+    - source_labels: [__meta_kubernetes_namespace]
+      action: replace
+      target_label: namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      action: replace
+      target_label: pod
+
+  # Scrape istiod control plane metrics (port 15014)
+  - job_name: 'istiod'
+    kubernetes_sd_configs:
+    - role: endpoints
+      namespaces:
+        names: [istio-system]
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+      action: keep
+      regex: istiod;http-monitoring
+    - action: labelmap
+      regex: __meta_kubernetes_pod_label_(.+)
+    - source_labels: [__meta_kubernetes_namespace]
+      action: replace
+      target_label: namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      action: replace
+      target_label: pod
+
+  # Scrape Envoy admin stats on port 15090 (gateway pods)
+  - job_name: 'istio-gateways'
+    kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names:
+        - istio-system
+        - retail-banking
+        - payments
+        - grc
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_istio]
+      action: keep
+      regex: .+gateway
+    - source_labels: [__address__]
+      action: replace
+      regex: ([^:]+)(?::\d+)?
+      replacement: $1:15090
+      target_label: __address__
+    - target_label: __metrics_path__
+      replacement: /stats/prometheus
+    - action: labelmap
+      regex: __meta_kubernetes_pod_label_(.+)
+    - source_labels: [__meta_kubernetes_namespace]
+      action: replace
+      target_label: namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      action: replace
+      target_label: pod

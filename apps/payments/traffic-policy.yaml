@@ -1,0 +1,48 @@
+# ============================================================
+# Replaces: Kong HTTPRoute for payments
+# Purpose:  Istio traffic management policies for payments.
+# Entry: transfer-svc → payment-gateway-svc → fx-svc
+# Note: transfer-svc timeout/retry is merged into virtualservice.yaml
+# ============================================================
+---
+# Retry + timeout on payment-gateway-svc
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payment-gateway-svc-traffic-policy
+  namespace: payments
+spec:
+  hosts:
+    - payment-gateway-svc
+  http:
+    - route:
+        - destination:
+            host: payment-gateway-svc
+            port:
+              number: 7072
+      timeout: 15s
+      retries:
+        attempts: 3
+        perTryTimeout: 5s
+        retryOn: gateway-error,connect-failure,retriable-4xx
+---
+# Retry + timeout on fx-svc
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: fx-svc-traffic-policy
+  namespace: payments
+spec:
+  hosts:
+    - fx-svc
+  http:
+    - route:
+        - destination:
+            host: fx-svc
+            port:
+              number: 7073
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: gateway-error,connect-failure,retriable-4xx

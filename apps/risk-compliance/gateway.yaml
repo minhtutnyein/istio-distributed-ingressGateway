@@ -1,0 +1,23 @@
+# ============================================================
+# apps/risk-compliance/gateway.yaml
+# Purpose:  Namespace-scoped Istio Gateway bound to the
+#           grc-ingressgateway pod (ClusterIP).
+#           Receives mTLS traffic forwarded by the global gateway
+#           on port 80 (URI already rewritten to /).
+# ============================================================
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: grc-gateway
+  namespace: grc
+spec:
+  selector:
+    istio: grc-ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "finance.mhnbank.xyz"

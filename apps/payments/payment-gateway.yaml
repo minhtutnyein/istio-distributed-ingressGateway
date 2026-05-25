@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-gateway-svc
+  namespace: payments
+spec:
+  selector:
+    app: payment-gateway-svc
+  ports:
+    - name: http
+      port: 7072
+      targetPort: 9092
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payment-gateway-svc
+  namespace: payments
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-gateway-svc
+  namespace: payments
+  labels:
+    app: payment-gateway-svc
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-gateway-svc
+  template:
+    metadata:
+      labels:
+        app: payment-gateway-svc
+        version: v1
+    spec:
+      serviceAccountName: payment-gateway-svc
+      containers:
+        - name: payment-gateway-svc
+          image: nicholasjackson/fake-service:v0.26.2
+          ports:
+            - containerPort: 9092
+          env:
+            - name: LISTEN_ADDR
+              value: 0.0.0.0:9092
+            - name: UPSTREAM_URIS
+              value: http://fx-svc.payments.svc.cluster.local:7073
+            - name: NAME
+              value: payment-gateway-svc
+            - name: MESSAGE
+              value: "MHN Bank | payments | payment-gateway"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"

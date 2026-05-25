@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-profile-svc
+  namespace: retail-banking
+spec:
+  selector:
+    app: customer-profile-svc
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 9091
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: customer-profile-svc
+  namespace: retail-banking
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-profile-svc
+  namespace: retail-banking
+  labels:
+    app: customer-profile-svc
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: customer-profile-svc
+  template:
+    metadata:
+      labels:
+        app: customer-profile-svc
+        version: v1
+    spec:
+      serviceAccountName: customer-profile-svc
+      containers:
+        - name: customer-profile-svc
+          image: nicholasjackson/fake-service:v0.26.2
+          ports:
+            - containerPort: 9091
+          env:
+            - name: LISTEN_ADDR
+              value: 0.0.0.0:9091
+            - name: UPSTREAM_URIS
+              value: http://account-svc.retail-banking.svc.cluster.local:8082
+            - name: NAME
+              value: customer-profile-svc
+            - name: MESSAGE
+              value: 'MHN Bank | retail-banking | customer-profile'
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+

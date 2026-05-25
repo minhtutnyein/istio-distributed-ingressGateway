@@ -1,0 +1,116 @@
+# ============================================================
+# 4-mtls-destination-rules.yaml
+# Purpose:  DestinationRules instruct Envoy sidecars to use mTLS
+#           when initiating connections to each service.
+#           Combined with PeerAuthentication STRICT (file
+#           2-downstream-proxy-services.yaml), this enforces
+#           mutual TLS in both directions for every service.
+#
+# SPIFFE identity format (auto-issued by istiod):
+#   spiffe://<trust-domain>/ns/<namespace>/sa/<serviceaccount>
+# ============================================================
+
+# ── retail-banking ──────────────────────────────────────────
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: account-svc-dr
+  namespace: retail-banking
+spec:
+  host: account-svc.retail-banking.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: bank-statement-svc-dr
+  namespace: retail-banking
+spec:
+  host: bank-statement-svc.retail-banking.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: customer-profile-svc-dr
+  namespace: retail-banking
+spec:
+  host: customer-profile-svc.retail-banking.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+
+# ── payments ────────────────────────────────────────────────
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-gateway-svc-dr
+  namespace: payments
+spec:
+  host: payment-gateway-svc.payments.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: fx-svc-dr
+  namespace: payments
+spec:
+  host: fx-svc.payments.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: transfer-svc-dr
+  namespace: payments
+spec:
+  host: transfer-svc.payments.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+
+# ── grc ─────────────────────────────────────────────────────
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: audit-svc-dr
+  namespace: grc
+spec:
+  host: audit-svc.grc.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: sanction-svc-dr
+  namespace: grc
+spec:
+  host: sanction-svc.grc.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: fraud-svc-dr
+  namespace: grc
+spec:
+  host: fraud-svc.grc.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL

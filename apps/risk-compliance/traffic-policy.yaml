@@ -1,0 +1,48 @@
+# ============================================================
+# Replaces: Kong HTTPRoute for grc
+# Purpose:  Istio traffic management policies for GRC.
+# Entry: fraud-svc → audit-svc → sanction-svc
+# Note: fraud-svc timeout/retry is merged into virtualservice.yaml
+# ============================================================
+---
+# Retry + timeout on audit-svc
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: audit-svc-traffic-policy
+  namespace: grc
+spec:
+  hosts:
+    - audit-svc
+  http:
+    - route:
+        - destination:
+            host: audit-svc
+            port:
+              number: 6062
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: gateway-error,connect-failure,retriable-4xx
+---
+# Retry + timeout on sanction-svc
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: sanction-svc-traffic-policy
+  namespace: grc
+spec:
+  hosts:
+    - sanction-svc
+  http:
+    - route:
+        - destination:
+            host: sanction-svc
+            port:
+              number: 6063
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+        retryOn: gateway-error,connect-failure,retriable-4xx

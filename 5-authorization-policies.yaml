@@ -1,0 +1,161 @@
+# ============================================================
+# 5-authorization-policies.yaml
+# Purpose:  AuthorizationPolicies enforce RBAC at the service level.
+#           Only the Istio IngressGateway (istio-system) and the correct
+#           upstream service may call each downstream service.
+#
+# Call chains:
+#   retail-banking: IngressGW → customer-profile-svc → account-svc → bank-statement-svc
+#   payments:       IngressGW → transfer-svc → payment-gateway-svc → fx-svc
+#   grc:            IngressGW → fraud-svc → audit-svc → sanction-svc
+# ============================================================
+
+# ── retail-banking ──────────────────────────────────────────
+# customer-profile-svc: only retail-banking-ingressgateway pod may call it (entry point)
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-customer-profile-svc
+  namespace: retail-banking
+spec:
+  selector:
+    matchLabels:
+      app: customer-profile-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/retail-banking/sa/retail-banking-ingressgateway"
+---
+# account-svc: only customer-profile-svc may call it
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-account-svc
+  namespace: retail-banking
+spec:
+  selector:
+    matchLabels:
+      app: account-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/retail-banking/sa/customer-profile-svc"
+---
+# bank-statement-svc: only account-svc may call it
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-bank-statement-svc
+  namespace: retail-banking
+spec:
+  selector:
+    matchLabels:
+      app: bank-statement-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/retail-banking/sa/account-svc"
+
+# ── payments ────────────────────────────────────────────────
+# transfer-svc: only payments-ingressgateway pod may call it (entry point)
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-transfer-svc
+  namespace: payments
+spec:
+  selector:
+    matchLabels:
+      app: transfer-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/payments/sa/payments-ingressgateway"
+---
+# payment-gateway-svc: only transfer-svc may call it
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-payment-gateway-svc
+  namespace: payments
+spec:
+  selector:
+    matchLabels:
+      app: payment-gateway-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/payments/sa/transfer-svc"
+---
+# fx-svc: only payment-gateway-svc may call it
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-fx-svc
+  namespace: payments
+spec:
+  selector:
+    matchLabels:
+      app: fx-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/payments/sa/payment-gateway-svc"
+
+# ── grc ─────────────────────────────────────────────────────
+# fraud-svc: only grc-ingressgateway pod may call it (entry point)
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-fraud-svc
+  namespace: grc
+spec:
+  selector:
+    matchLabels:
+      app: fraud-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/grc/sa/grc-ingressgateway"
+---
+# audit-svc: only fraud-svc may call it
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-audit-svc
+  namespace: grc
+spec:
+  selector:
+    matchLabels:
+      app: audit-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/grc/sa/fraud-svc"
+---
+# sanction-svc: only audit-svc may call it
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-sanction-svc
+  namespace: grc
+spec:
+  selector:
+    matchLabels:
+      app: sanction-svc
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/grc/sa/audit-svc"
