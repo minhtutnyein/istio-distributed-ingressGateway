@@ -1,0 +1,95 @@
+# ============================================================
+# 8-jwt-cors-envoyfilter.yaml
+# Purpose:  CORS support for browser-based API clients (SPAs)
+#           that send JWT Bearer tokens directly.
+#
+# Problem:  Browsers send an OPTIONS preflight request before
+#           every cross-origin POST/PUT/DELETE.  Preflight
+#           requests carry no Authorization header, so Istio's
+#           JWT filter would reject them with 401.
+#
+# Solution (two EnvoyFilters, same approach as the reference
+#           article "JWT-Based Traffic Routing with Istio,
+#           Keycloak and AWS EKS"):
+#
+#   Filter 1 — bypass_cors_preflight: tells the jwt_authn
+#              filter to skip validation for OPTIONS requests.
+#
+#   Filter 2 — Lua script: intercepts OPTIONS at the edge and
+#              immediately returns 200 with CORS headers so
+#              the preflight never reaches the backend.
+#
+# These filters only apply to the global IngressGateway pod.
+# ============================================================
+---
+# Filter 1: Tell jwt_authn to skip OPTIONS (CORS preflight)
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: jwt-bypass-cors-preflight
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: "envoy.filters.http.jwt_authn"
+      patch:
+        operation: MERGE
+        value:
+          name: "envoy.filters.http.jwt_authn"
+          typed_config:
+            "@type": "type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication"
+            bypass_cors_preflight: true
+---
+# Filter 2: Return CORS headers immediately for OPTIONS requests
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: cors-preflight-response
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: "envoy.filters.http.router"
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.lua
+          typed_config:
+            "@type": "type.googleapis.com/envoy.extensions.filters.http.lua.v3.LuaPerRoute"
+            inlineCode: |
+              function envoy_on_request(request_handle)
+                local method = request_handle:headers():get(":method")
+                if method == "OPTIONS" then
+                  request_handle:respond(
+                    {
+                      [":status"]                          = "200",
+                      ["access-control-allow-origin"]      = "*",
+                      ["access-control-allow-methods"]     = "GET, POST, PUT, DELETE, OPTIONS",
+                      ["access-control-allow-headers"]     = "Authorization, Content-Type, X-Requested-With",
+                      ["access-control-allow-credentials"] = "true",
+                      ["access-control-max-age"]           = "86400"
+                    },
+                    ""
+                  )
+                end
+              end

@@ -50,14 +50,18 @@ spec:
             # ── Identity Provider ────────────────────────────
             - --provider=keycloak-oidc
             - --client-id=oauth2-proxy-client
-            # Use in-cluster DNS so OAuth2 Proxy can reach Keycloak without an
-            # external DNS record for auth.mhnbank.xyz.  KC_HOSTNAME_URL is set
-            # in Keycloak so OIDC metadata (authorization_endpoint etc.) still
-            # advertises auth.mhnbank.xyz for browser redirects.
-            - --oidc-issuer-url=http://keycloak.keycloak.svc.cluster.local/realms/mhnbank
-            # Keycloak tokens carry iss=auth.mhnbank.xyz but OAuth2 Proxy is
-            # configured with the internal issuer URL — skip the mismatch check.
-            - --insecure-oidc-skip-issuer-verification=true
+            # --oidc-issuer-url must match the iss claim in Keycloak JWTs (public hostname).
+            # --skip-oidc-discovery=true prevents fetching the OIDC discovery endpoint at
+            # startup — avoids ELB hairpin connectivity issues from inside the cluster.
+            # All Keycloak communication is handled by the three explicit endpoint flags below.
+            - --oidc-issuer-url=http://auth.mhnbank.xyz/realms/mhnbank
+            - --skip-oidc-discovery=true
+            # --login-url: public URL — sent to the browser as the authorization redirect.
+            - --login-url=http://auth.mhnbank.xyz/realms/mhnbank/protocol/openid-connect/auth
+            # --redeem-url and --oidc-jwks-url: internal cluster DNS — server-side only,
+            # no external round-trips for token exchange and JWKS fetching.
+            - --redeem-url=http://keycloak.keycloak.svc.cluster.local/realms/mhnbank/protocol/openid-connect/token
+            - --oidc-jwks-url=http://keycloak.keycloak.svc.cluster.local/realms/mhnbank/protocol/openid-connect/certs
             # ── Redirect URI ─────────────────────────────────
             - --redirect-url=http://finance.mhnbank.xyz/oauth2/callback
             # ── Email / scope ────────────────────────────────
@@ -71,6 +75,11 @@ spec:
             - --cookie-refresh=4m
             - --cookie-expire=30m
             - --skip-provider-button=true
+            # Allow API clients with a valid Keycloak Bearer JWT to bypass
+            # the OAuth2 session flow.  OAuth2 Proxy validates the token
+            # signature against Keycloak JWKS and returns 200 to Envoy
+            # without creating a Redis session.
+            - --skip-jwt-bearer-tokens=true
             # ── Token passthrough headers ─────────────────────
             - --pass-access-token=true
             - --set-xauthrequest=true

@@ -1,0 +1,164 @@
+  Accessing Keycloak Web UI
+  
+  Keycloak's Service is ClusterIP, so there are two ways to reach it:
+
+  Option A — Via auth.mhnbank.xyz (DNS must be set up)
+
+  If your DNS CNAME is already pointing auth.mhnbank.xyz → ELB hostname, just open:
+
+  http://auth.mhnbank.xyz/admin
+
+  Option B — Port-forward (works without DNS)
+
+  kubectl port-forward svc/keycloak -n keycloak 8080:80
+
+  Then open: http://localhost:8080/admin
+
+  Admin credentials:
+
+  ┌──────────┬───────────────────┐
+  │  Field   │       Value       │
+  ├──────────┼───────────────────┤
+  │ Username │ admin             │
+  ├──────────┼───────────────────┤
+  │ Password │ Admin@MHNBank2025 │
+  └──────────┴───────────────────┘
+
+  Once logged in, switch to the mhnbank realm (top-left dropdown). You'll see the 4 clients and testuser pre-imported.
+
+  ---
+  Testing the JWT Traffic Flow
+
+  First, get your ELB hostname:
+
+  INGRESS_HOST=$(kubectl get svc istio-ingressgateway -n istio-system \
+    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+  echo $INGRESS_HOST
+
+  ---
+  Test 1 — Unauthenticated request (expect 302 redirect)
+  
+  Confirms the CUSTOM AuthorizationPolicy + OAuth2 Proxy is active:
+
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -H "Host: finance.mhnbank.xyz" \
+    http://${INGRESS_HOST}/retail-banking/
+  # Expected: 302
+
+  ---
+  Test 2 — Get a JWT from Keycloak (client_credentials)
+
+  Each domain has its own API client. Pick the one matching the path you want to call:
+
+  # retail-banking-api client
+  TOKEN=$(curl -s -X POST \
+    -H "Host: auth.mhnbank.xyz" \
+    http://${INGRESS_HOST}/realms/mhnbank/protocol/openid-connect/token \
+    -d "client_id=retail-banking-api" \
+    -d "client_secret=retail-banking-api-secret" \
+    -d "grant_type=client_credentials" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+  echo $TOKEN
+
+  ▎ If DNS is set up, replace http://${INGRESS_HOST} with http://auth.mhnbank.xyz and drop the -H "Host:" header.
+
+  ---
+  Test 3 — Decode the JWT (verify the domain claim)
+
+  echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool
+
+  You should see the custom claim injected by the Keycloak protocol mapper:
+
+  {
+    "iss": "http://auth.mhnbank.xyz/realms/mhnbank",
+    "azp": "retail-banking-api",
+    "domain": "retail-banking",
+    ...
+  }
+
+  The domain claim is what gets extracted into the x-jwt-domain request header by 7-request-authentication.yaml.
+
+  ---
+  Test 4 — Call the API with the Bearer token (expect 200)
+
+  curl -s \
+    -H "Host: finance.mhnbank.xyz" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    http://${INGRESS_HOST}/retail-banking/
+
+  Expected: 200 OK with JSON body like "MHN Bank | retail-banking | account-v1".
+
+  Repeat for the other two domains using their own tokens:
+
+  # payments
+  TOKEN_PAY=$(curl -s -X POST \
+    -H "Host: auth.mhnbank.xyz" \
+    http://${INGRESS_HOST}/realms/mhnbank/protocol/openid-connect/token \
+    -d "client_id=payments-api" \
+    -d "client_secret=payments-api-secret" \
+    -d "grant_type=client_credentials" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+  curl -s \
+    -H "Host: finance.mhnbank.xyz" \
+    -H "Authorization: Bearer ${TOKEN_PAY}" \
+    http://${INGRESS_HOST}/payments/
+
+  # grc
+  TOKEN_GRC=$(curl -s -X POST \
+    -H "Host: auth.mhnbank.xyz" \
+    http://${INGRESS_HOST}/realms/mhnbank/protocol/openid-connect/token \
+    -d "client_id=grc-api" \
+    -d "client_secret=grc-api-secret" \
+    -d "grant_type=client_credentials" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+  curl -s \
+    -H "Host: finance.mhnbank.xyz" \
+    -H "Authorization: Bearer ${TOKEN_GRC}" \
+    http://${INGRESS_HOST}/grc/
+
+  ---
+  Test 5 — Cross-client token rejection (expect 403 or 302)
+  
+  Use retail-banking-api token to call /payments/ — OAuth2 Proxy validates the token is valid but the path doesn't match what this client is intended for:
+
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -H "Host: finance.mhnbank.xyz" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    http://${INGRESS_HOST}/payments/
+
+  ---
+  Test 6 — Browser flow (testuser login)
+
+  Open a browser and navigate to:
+
+  http://finance.mhnbank.xyz/retail-banking/
+
+  Flow you will see:
+  1. Redirected to http://auth.mhnbank.xyz/realms/mhnbank/... (Keycloak login page)
+  2. Login with testuser / testpassword
+  3. Redirected back to http://finance.mhnbank.xyz/oauth2/callback
+  4. Cookie _mhnbank_oauth2 set, redirected to /retail-banking/
+  5. Response 200 OK
+
+  ---
+  Test 7 — Verify headers forwarded into the mesh
+  
+  Use kubectl logs on an entry service to confirm the auth headers arrived:
+
+  kubectl logs -n retail-banking \
+    $(kubectl get pod -n retail-banking -l app=customer-profile-svc \
+      -o jsonpath='{.items[0].metadata.name}') \
+    | grep -i "x-auth\|x-jwt\|authorization" | tail -10
+
+  For the JWT flow you should see:
+  - x-jwt-domain: retail-banking
+  - x-jwt-client: retail-banking-api
+  - authorization: Bearer <token> (because forwardOriginalToken: true)
+
+  For the browser/cookie flow you should see:
+  - x-auth-request-user: testuser
+  - x-auth-request-email: testuser@mhnbank.xyz
+  - x-auth-request-access-token: <token>

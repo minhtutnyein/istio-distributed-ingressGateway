@@ -28,6 +28,84 @@ data:
       "accessTokenLifespan": 300,
       "clients": [
         {
+          "clientId": "retail-banking-api",
+          "enabled": true,
+          "secret": "retail-banking-api-secret",
+          "publicClient": false,
+          "protocol": "openid-connect",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": true,
+          "protocolMappers": [
+            {
+              "name": "domain-claim",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-hardcoded-claim-mapper",
+              "consentRequired": false,
+              "config": {
+                "claim.value": "retail-banking",
+                "userinfo.token.claim": "true",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "domain",
+                "jsonType.label": "String"
+              }
+            }
+          ]
+        },
+        {
+          "clientId": "payments-api",
+          "enabled": true,
+          "secret": "payments-api-secret",
+          "publicClient": false,
+          "protocol": "openid-connect",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": true,
+          "protocolMappers": [
+            {
+              "name": "domain-claim",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-hardcoded-claim-mapper",
+              "consentRequired": false,
+              "config": {
+                "claim.value": "payments",
+                "userinfo.token.claim": "true",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "domain",
+                "jsonType.label": "String"
+              }
+            }
+          ]
+        },
+        {
+          "clientId": "grc-api",
+          "enabled": true,
+          "secret": "grc-api-secret",
+          "publicClient": false,
+          "protocol": "openid-connect",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": true,
+          "protocolMappers": [
+            {
+              "name": "domain-claim",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-hardcoded-claim-mapper",
+              "consentRequired": false,
+              "config": {
+                "claim.value": "grc",
+                "userinfo.token.claim": "true",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "domain",
+                "jsonType.label": "String"
+              }
+            }
+          ]
+        },
+        {
           "clientId": "oauth2-proxy-client",
           "enabled": true,
           "secret": "changeme-keycloak-client-secret",
@@ -42,7 +120,7 @@ data:
           "publicClient": false,
           "protocol": "openid-connect",
           "standardFlowEnabled": true,
-          "directAccessGrantsEnabled": false,
+          "directAccessGrantsEnabled": true,
           "serviceAccountsEnabled": false,
           "authorizationServicesEnabled": false,
           "defaultClientScopes": [

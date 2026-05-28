@@ -1,9 +1,27 @@
 # ============================================================
 # 3-global-virtualservice.yaml
-# Purpose:  Two-tier routing — global IngressGateway (TLS) forwards to
-#           per-namespace IngressGateways (mTLS) based on path prefix.
-#           URI prefix is stripped (rewrite to /) before forwarding.
-# Flow:  client → HTTPS → global-gw → mTLS → <ns>-ingressgateway → app
+# Purpose:  Two-tier routing — global IngressGateway forwards to
+#           per-namespace IngressGateways based on:
+#             1. JWT domain claim  (API / machine clients)
+#             2. URL path prefix   (browser / OAuth2 Proxy clients)
+#
+# JWT routing (new):
+#   API client obtains a Bearer JWT from Keycloak using the
+#   client-credentials grant for one of the domain API clients
+#   (retail-banking-api, payments-api, grc-api).  The JWT
+#   carries a hardcoded 'domain' claim.  Istio's
+#   RequestAuthentication (7-request-authentication.yaml)
+#   validates the token and makes @request.auth.claims.domain
+#   available for header matching in this VirtualService.
+#
+#   Flow:  curl -H "Authorization: Bearer <jwt>" https://finance.mhnbank.xyz/
+#           → matched by domain claim → routed to namespace gateway → app
+#
+# Path routing (existing):
+#   Browser users authenticated via OAuth2 Proxy use the path
+#   prefix to reach the correct domain namespace.
+#
+#   Flow:  browser → /retail-banking/ → retail-banking gateway → app
 # ============================================================
 ---
 apiVersion: networking.istio.io/v1beta1
@@ -17,6 +35,51 @@ spec:
   gateways:
     - global-istio-gateway
   http:
+    # ── Tier 1: JWT claim routing (API / machine clients) ────
+    # Evaluated first.  RequestAuthentication extracts the
+    # 'domain' claim from a valid Bearer JWT into the
+    # @request.auth.claims.domain header.
+    # No path prefix is required — clients call / directly.
+    - name: "jwt-retail-banking"
+      match:
+        - headers:
+            "@request.auth.claims.domain":
+              exact: retail-banking
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: retail-banking-ingressgateway.retail-banking.svc.cluster.local
+            port:
+              number: 80
+
+    - name: "jwt-payments"
+      match:
+        - headers:
+            "@request.auth.claims.domain":
+              exact: payments
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: payments-ingressgateway.payments.svc.cluster.local
+            port:
+              number: 80
+
+    - name: "jwt-grc"
+      match:
+        - headers:
+            "@request.auth.claims.domain":
+              exact: grc
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: grc-ingressgateway.grc.svc.cluster.local
+            port:
+              number: 80
+
+    # ── Tier 2: Path-prefix routing (browser / OAuth2 clients) ──
     # Redirect no-trailing-slash URLs to canonical paths.
     - match:
         - uri:

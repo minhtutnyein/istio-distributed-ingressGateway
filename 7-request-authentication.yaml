@@ -1,0 +1,46 @@
+# ============================================================
+# 7-request-authentication.yaml
+# Purpose:  JWT validation at the global Istio IngressGateway.
+#           Implements the "JWT-Based Traffic Routing" pattern:
+#           Istio validates the Bearer token against Keycloak's
+#           JWKS endpoint and extracts claims into headers so
+#           VirtualService and AuthorizationPolicy can route/
+#           enforce access by domain.
+#
+# Two flows coexist after this is applied:
+#   Browser clients  → OAuth2 Proxy session cookie (existing)
+#   API clients      → Bearer JWT token (new, this file)
+#
+# JWT acquisition for API clients:
+#   curl -X POST http://auth.mhnbank.xyz/realms/mhnbank/protocol/openid-connect/token \
+#     -d "client_id=retail-banking-api&client_secret=<secret>&grant_type=client_credentials"
+#
+#   curl -H "Authorization: Bearer <token>" http://finance.mhnbank.xyz/
+# ============================================================
+---
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: jwt-keycloak
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  jwtRules:
+    - issuer: "http://auth.mhnbank.xyz/realms/mhnbank"
+      # Use in-cluster DNS — avoids external round-trip for JWKS fetch.
+      # Keycloak sets iss=http://auth.mhnbank.xyz/... in the token (KC_HOSTNAME_URL),
+      # so issuer above must match that public value even though jwksUri is internal.
+      jwksUri: "http://keycloak.keycloak.svc.cluster.local/realms/mhnbank/protocol/openid-connect/certs"
+      # Forward the raw Bearer token to upstream services so they can
+      # perform their own validation or extract claims downstream.
+      forwardOriginalToken: true
+      # Extract JWT claims into request headers for VirtualService matching.
+      # x-jwt-domain  → used by VirtualService to route to the correct domain namespace
+      # x-jwt-client  → debugging / audit; carries the Keycloak client_id (azp claim)
+      outputClaimToHeaders:
+        - header: x-jwt-domain
+          claim: domain
+        - header: x-jwt-client
+          claim: azp

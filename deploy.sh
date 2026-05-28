@@ -46,9 +46,6 @@ cd "$SCRIPT_DIR"
 # =============================================================================
 step "Step 0 — Connect to EKS cluster"
 aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$REGION"
-kubectl config current-context
-echo ""
-kubectl get nodes
 ok "EKS cluster connected"
 
 # =============================================================================
@@ -148,12 +145,6 @@ helm upgrade --install grc-ingressgateway istio/gateway \
   -f helm-values/grc-ingress-values.yaml \
   --wait
 ok "grc-ingressgateway installed"
-
-echo ""
-echo "Namespace gateway service types:"
-kubectl get svc -n retail-banking retail-banking-ingressgateway -o jsonpath='{.spec.type}' && echo " (retail-banking)"
-kubectl get svc -n payments       payments-ingressgateway       -o jsonpath='{.spec.type}' && echo " (payments)"
-kubectl get svc -n grc            grc-ingressgateway            -o jsonpath='{.spec.type}' && echo " (grc)"
 
 # =============================================================================
 # STEP 6b — Keycloak Identity Provider
@@ -337,48 +328,9 @@ echo ""
 ok "Kiali URL: http://${KIALI_HOST}:20001/kiali"
 
 # =============================================================================
-# STEP 11 — Verification summary
+# STEP 11 — End-to-end traffic test
 # =============================================================================
-step "Step 11 — Verification summary"
-
-echo ""
-echo -e "${BOLD}1. LoadBalancers${NC}"
-kubectl get svc -A --field-selector spec.type=LoadBalancer
-
-echo ""
-echo -e "${BOLD}2. Namespace injection labels${NC}"
-kubectl get ns retail-banking payments grc --show-labels | grep istio-injection
-
-echo ""
-echo -e "${BOLD}3. Pods with sidecars (expect 2/2)${NC}"
-kubectl get pods -n retail-banking -o wide
-kubectl get pods -n payments       -o wide
-kubectl get pods -n grc            -o wide
-
-echo ""
-echo -e "${BOLD}4. PeerAuthentication (expect STRICT everywhere)${NC}"
-kubectl get peerauthentication -A
-
-echo ""
-echo -e "${BOLD}5. DestinationRules${NC}"
-kubectl get destinationrule -A
-
-echo ""
-echo -e "${BOLD}6. AuthorizationPolicies (9 service-level + 1 CUSTOM gateway = 10)${NC}"
-kubectl get authorizationpolicy -A
-
-echo ""
-echo -e "${BOLD}7. Gateway CRs${NC}"
-kubectl get gateway -A
-
-echo ""
-echo -e "${BOLD}8. VirtualServices${NC}"
-kubectl get virtualservice -A
-
-# =============================================================================
-# STEP 12 — End-to-end traffic test
-# =============================================================================
-step "Step 12 — End-to-end traffic test"
+step "Step 11 — End-to-end traffic test"
 
 INGRESS_HOST=$(kubectl get svc istio-ingressgateway -n istio-system \
   -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
