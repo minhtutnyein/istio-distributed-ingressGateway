@@ -652,8 +652,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 /payments/       → transfer-svc:7071          → payment-gateway-svc:7072 → fx-svc:7073    (leaf)
 /grc/            → fraud-svc:6061             → audit-svc:6062   → sanction-svc:6063      (leaf)
 ```
- ## Project Summary: Distributed API Gateway for MHN Bank
-
+ ## Project Summary: Distributed API Gateway for these Microservices
   What It Is
 
   A secure, enterprise-grade API gateway infrastructure built on AWS, designed to protect and route all external traffic into a banking microservices
